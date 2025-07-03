@@ -38,26 +38,26 @@ def load_manifest():
         with open(manifest_path, 'r') as f:
             firmware_map = json.load(f)
     except Exception as e:
-        print(f"❌ Could not load manifest: {e}")
+        print(f"Could not load manifest: {e}")
         firmware_map = {}
 
 def on_connect(client, userdata, flags, rc):
-    print("✅ MQTT Connected" if rc == 0 else f"❌ MQTT Connect failed: {rc}")
+    print("MQTT Connected" if rc == 0 else f"MQTT Connect failed: {rc}")
     client.subscribe(request_topic)
 
 def on_message(client, userdata, msg):
     try:
         device_id = msg.payload.decode("utf-8").strip()
-        print(f"📥 Received device ID: {device_id}")
+        print(f"Received device ID: {device_id}")
         firmware = firmware_map.get(device_id)
         if firmware:
             response_topic = response_base_topic + device_id
             client.publish(response_topic, firmware)
-            print(f"📤 Sent firmware '{firmware}' to {device_id}")
+            print(f"Sent firmware '{firmware}' to {device_id}")
         else:
-            print(f"⚠️ No firmware mapped for {device_id}")
+            print(f"No firmware mapped for {device_id}")
     except Exception as e:
-        print(f"❌ Error in MQTT message: {e}")
+        print(f"Error in MQTT message: {e}")
 
 def run_mqtt():
     client = mqtt.Client()

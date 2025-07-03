@@ -7,26 +7,26 @@
 #include <WiFiClient.h>
 
 // =========================
-// 🔧 Configuration
+//  Configuration
 // =========================
 const char* device_id = "esp_2";  // Change per device
 const char* mqtt_server = "192.168.1.100";  // Update with server IP
 const char* firmware_base_url = "http://192.168.1.100/firmware/";
 
 // =========================
-// 🔌 Network Clients
+//  Network Clients
 // =========================
 extern WiFiClient espClient;
 extern PubSubClient mqttClient;
 
 // =========================
-// 📡 MQTT Topics
+//  MQTT Topics
 // =========================
 extern String response_topic;
 extern const char* request_topic;
 
 // =========================
-// 🔁 Functions
+//      Functions
 // =========================
 void connectToWiFi();
 void connectToMQTT();
