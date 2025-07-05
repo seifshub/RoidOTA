@@ -135,7 +135,7 @@ export class FirmwareService {
       return {
         status: 'success',
         message: `Command sent to ${deviceId}`,
-        deviceId,
+        deviceId, 
         command,
       };
     } catch (error) {

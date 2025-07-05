@@ -90,40 +90,28 @@ export class CompilationService {
     const headerSource = path.join(__dirname, '../../templates/base-firmware/roidOTA.h');
     await fs.copyFile(headerSource, path.join(tempDir, 'roidOTA.h'));
 
-    const platformioIni = this.generatePlatformioConfig(deviceId, deviceConfig);
+    const platformioIni = await this.generatePlatformioConfig(deviceId, deviceConfig);
     await fs.writeFile(path.join(tempDir, 'platformio.ini'), platformioIni);
   }
 
-  private generatePlatformioConfig(deviceId: string, deviceConfig?: Record<string, any>): string {
-    return `
-[env:esp32dev]
-platform = espressif32
-board = esp32dev
-framework = arduino
-upload_port = /dev/cu.usbserial-9
-monitor_speed = 115200
+  private async generatePlatformioConfig(deviceId: string, deviceConfig?: Record<string, any>): Promise<string> {
+    
+    const templatePath = path.join(__dirname, `../../templates/base-firmware/platformio.ini`);
+    let template = await fs.readFile(templatePath, 'utf-8');
 
-; Core libraries for RoidOTA
-lib_deps = 
-    tzapu/WiFiManager
-    knolleary/PubSubClient
-    bblanchon/ArduinoJson@^6.21.3
-    HTTPClient
-    Update
+    // Replace placeholders
+    template = template.replace('{{DEVICE_ID}}', deviceId);
+    template = template.replace('{{HEARTBEAT_INTERVAL}}', (deviceConfig?.heartbeatInterval || 30000).toString());
+    
+    // Handle extra build flags
+    const extraBuildFlags = deviceConfig?.buildFlags ? 
+      deviceConfig.buildFlags.map((flag: string) => `    ${flag}`).join('\n') : '';
+    template = template.replace('{{EXTRA_BUILD_FLAGS}}', extraBuildFlags);
+    
+    // Handle extra configuration
+    template = template.replace('{{EXTRA_CONFIG}}', deviceConfig?.extraConfig || '');
 
-; Build flags
-build_flags = 
-    -DDEVICE_ID=\\"${deviceId}\\"
-    -DCORE_DEBUG_LEVEL=3
-    -DCONFIG_ARDUHAL_LOG_COLORS=1
-    -DMQTT_MAX_PACKET_SIZE=512
-    -DHEARTBEAT_INTERVAL=30000
-
-; Upload settings
-upload_speed = 921600
-monitor_filters = esp32_exception_decoder
-${deviceConfig?.extraConfig || ''}
-`.trim();
+    return template;
   }
 
   private async compileFirmware(projectDir: string): Promise<string> {

@@ -1,24 +1,24 @@
 import {
-  Controller,
-  Post,
-  Get,
-  Put,
-  Body,
-  UploadedFile,
-  UseInterceptors,
-  Param,
-  HttpStatus,
-  HttpException,
+    Controller,
+    Post,
+    Get,
+    Put,
+    Body,
+    UploadedFile,
+    UseInterceptors,
+    Param,
+    HttpStatus,
+    HttpException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiConsumes } from '@nestjs/swagger';
 import { FirmwareService } from './firmware.service';
-import { UploadFirmwareDto , CompileFirmwareDto } from './dtos';
+import { UploadFirmwareDto, CompileFirmwareDto } from './dtos';
 
 @ApiTags('firmware')
 @Controller('firmware')
 export class FirmwareController {
-    constructor(private readonly firmwareService: FirmwareService) {}
+    constructor(private readonly firmwareService: FirmwareService) { }
 
     @Get('manifest')
     @ApiOperation({ summary: 'Get firmware manifest' })
@@ -41,7 +41,7 @@ export class FirmwareController {
         @Body() uploadDto: UploadFirmwareDto,
     ) {
         if (!file) {
-        throw new HttpException('No file uploaded', HttpStatus.BAD_REQUEST);
+            throw new HttpException('No file uploaded', HttpStatus.BAD_REQUEST);
         }
 
         return this.firmwareService.processUserCode(file, uploadDto);
@@ -61,10 +61,47 @@ export class FirmwareController {
     ) {
         return this.firmwareService.deployToDevice(deviceId, firmwareName);
     }
-    
+
     @Post('deploy/batch')
     @ApiOperation({ summary: 'Deploy firmware to multiple devices' })
     async batchDeploy(@Body() deployData: { devices: string[]; firmwareName: string }) {
         return this.firmwareService.batchDeploy(deployData.devices, deployData.firmwareName);
+    }
+
+    @Get('device/statuses')
+    @ApiOperation({ summary: 'Get statuses of all devices' })
+    async getDeviceStatuses() {
+        return this.firmwareService.getDeviceStatuses();
+    }
+
+    @Get('device/:deviceId/status')
+    @ApiOperation({ summary: 'Get status of a specific device' })
+    async getDeviceStatus(@Param('deviceId') deviceId: string) {
+        return this.firmwareService.getDeviceStatus(deviceId);
+    }
+
+    @Post('device/:deviceId/command')
+    @ApiOperation({ summary: 'Send command to device' })
+    async sendDeviceCommand(
+        @Param('deviceId') deviceId: string,
+        @Body('command') command: string,
+        @Body('params') params?: Record<string, any>,
+    ) {
+        if (!command) {
+            throw new HttpException('Command is required', HttpStatus.BAD_REQUEST);
+        }
+        return this.firmwareService.sendDeviceCommand(deviceId, command, params);
+    }
+
+    @Post('device/:deviceId/restart')
+    @ApiOperation({ summary: 'Restart a specific device' })
+    async restartDevice(@Param('deviceId') deviceId: string) {
+        return this.firmwareService.restartDevice(deviceId);
+    }
+
+    @Post('device/:deviceId/heartbeat')
+    @ApiOperation({ summary: 'Request heartbeat from a specific device' })
+    async requestDeviceHeartbeat(@Param('deviceId') deviceId: string) {
+        return this.firmwareService.requestDeviceHeartbeat(deviceId);
     }
 }

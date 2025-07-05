@@ -1,37 +1,17 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as mqtt from 'mqtt';
-
-interface DeviceStatus {
-  deviceId: string;
-  ip: string;
-  rssi: number;
-  uptime: number;
-  lastSeen: Date;
-  freeHeap?: number;
-}
-
-interface DeviceRequest {
-  device_id: string;
-  ip: string;
-  version?: string;
-  timestamp: number;
-}
+import { 
+  DeviceStatus, 
+  DeviceRequest, 
+  MQTT_TOPICS, 
+} from './types';
 
 @Injectable()
 export class MqttService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(MqttService.name);
   private client: mqtt.MqttClient;
   private deviceStatuses: Map<string, DeviceStatus> = new Map();
-
-  // Topic constants
-  private readonly TOPIC_PREFIX = 'roidota';
-  private readonly TOPIC_REQUEST = `${this.TOPIC_PREFIX}/request`;
-  private readonly TOPIC_RESPONSE = `${this.TOPIC_PREFIX}/response/`;
-  private readonly TOPIC_STATUS = `${this.TOPIC_PREFIX}/status/`;
-  private readonly TOPIC_LOGS = `${this.TOPIC_PREFIX}/logs/`;
-  private readonly TOPIC_CMD = `${this.TOPIC_PREFIX}/cmd/`;
-  private readonly TOPIC_ACK = `${this.TOPIC_PREFIX}/ack/`;
 
   constructor(private readonly configService: ConfigService) {}
 
@@ -47,10 +27,10 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       this.logger.log('Connected to MQTT broker');
       
       // Subscribe to all relevant topics
-      this.client.subscribe(this.TOPIC_REQUEST);
-      this.client.subscribe(`${this.TOPIC_STATUS}+`);
-      this.client.subscribe(`${this.TOPIC_LOGS}+`);
-      this.client.subscribe(`${this.TOPIC_ACK}+`);
+      this.client.subscribe(MQTT_TOPICS.REQUEST);
+      this.client.subscribe(`${MQTT_TOPICS.STATUS}+`);
+      this.client.subscribe(`${MQTT_TOPICS.LOGS}+`);
+      this.client.subscribe(`${MQTT_TOPICS.ACK}+`);
     });
 
     this.client.on('message', (topic, payload) => {
@@ -83,7 +63,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   }
 
   async publishFirmwareResponse(deviceId: string, firmwareUrl: string): Promise<void> {
-    const topic = `${this.TOPIC_RESPONSE}${deviceId}`;
+    const topic = `${MQTT_TOPICS.RESPONSE }${deviceId}`;
     const message = JSON.stringify({
       firmware_url: firmwareUrl,
       timestamp: Date.now(),
@@ -94,7 +74,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   }
 
   async sendCommand(deviceId: string, command: string, params?: Record<string, any>): Promise<void> {
-    const topic = `${this.TOPIC_CMD}${deviceId}`;
+    const topic = `${MQTT_TOPICS.CMD}${deviceId}`;
     const message = JSON.stringify({
       command,
       params: params || {},
@@ -114,13 +94,13 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
 
   private handleMessage(topic: string, message: string) {
     try {
-      if (topic === this.TOPIC_REQUEST) {
+      if (topic === MQTT_TOPICS.REQUEST) {
         this.handleDeviceRequest(message);
-      } else if (topic.startsWith(this.TOPIC_STATUS)) {
+      } else if (topic.startsWith(MQTT_TOPICS.STATUS)) {
         this.handleDeviceStatus(topic, message);
-      } else if (topic.startsWith(this.TOPIC_LOGS)) {
+      } else if (topic.startsWith(MQTT_TOPICS.LOGS)) {
         this.handleDeviceLogs(topic, message);
-      } else if (topic.startsWith(this.TOPIC_ACK)) {
+      } else if (topic.startsWith(MQTT_TOPICS.ACK)) {
         this.handleDeviceAck(topic, message);
       }
     } catch (error) {
@@ -151,7 +131,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
 
   private handleDeviceStatus(topic: string, message: string) {
     try {
-      const deviceId = topic.replace(this.TOPIC_STATUS, '');
+      const deviceId = topic.replace(MQTT_TOPICS.STATUS, '');
       const status = JSON.parse(message);
       
       this.deviceStatuses.set(deviceId, {
@@ -171,7 +151,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
 
   private handleDeviceLogs(topic: string, message: string) {
     try {
-      const deviceId = topic.replace(this.TOPIC_LOGS, '');
+      const deviceId = topic.replace(MQTT_TOPICS.LOGS, '');
       const logData = JSON.parse(message);
       
       this.logger.log(`[${deviceId}] ${logData.level}: ${logData.message}`);
@@ -182,7 +162,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
 
   private handleDeviceAck(topic: string, message: string) {
     try {
-      const deviceId = topic.replace(this.TOPIC_ACK, '');
+      const deviceId = topic.replace(MQTT_TOPICS.ACK, '');
       const ackData = JSON.parse(message);
       
       if (ackData.success) {

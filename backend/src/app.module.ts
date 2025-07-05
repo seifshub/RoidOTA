@@ -7,7 +7,6 @@ import { MulterModule } from '@nestjs/platform-express';
 import { MqttModule } from './mqtt/mqtt.module';
 import { CompilationModule } from './compilation/compilation.module';
 import { StorageModule } from './storage/storage.module';
-import { DeviceManagerModule } from './device-manager/device-manager.module';
 import configuration from './config/configuration';
 import { validationSchema } from './config/validation';
 
@@ -25,7 +24,6 @@ import { validationSchema } from './config/validation';
     MqttModule,
     CompilationModule,
     StorageModule,
-    DeviceManagerModule,
   ],
   controllers: [AppController],
   providers: [AppService],
