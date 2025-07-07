@@ -27,10 +27,10 @@ export class CompilationService {
   }) {
     const { deviceId, userCode, firmwareName, deviceConfig } = params;
 
-    const validation = CompilationUtils.validateArduinoCode(userCode);
-    if (!validation.valid) {
-      throw new Error(`Invalid user code: ${validation.errors.join(', ')}`);
-    }
+    // const validation = CompilationUtils.validateArduinoCode(userCode);
+    // if (!validation.valid) {
+    //   throw new Error(`Invalid user code: ${validation.errors.join(', ')}`);
+    // }
     // Create temporary project directory
     const tempBaseDir = this.configService.get('compilation.tempDir', { infer: true });
     const tempDir = path.join(tempBaseDir, `${deviceId}_${Date.now()}`);
@@ -70,7 +70,7 @@ export class CompilationService {
     let template = await fs.readFile(templatePath, 'utf-8');
 
     // Replace placeholders
-    template = template.replace('{{MQTT_SERVER}}', deviceConfig?.mqttServer || '192.168.1.100');
+    template = template.replace('{{MQTT_SERVER}}', '192.168.1.26');
     template = template.replace('{{USER_SETUP}}', CompilationUtils.extractSetupBody(userCode));
     template = template.replace('{{USER_LOOP}}', CompilationUtils.extractLoopBody(userCode));
     template = template.replace('{{USER_FUNCTIONS}}', CompilationUtils.extractExtraFunctions(userCode));
@@ -85,29 +85,33 @@ export class CompilationService {
     deviceId: string,
     deviceConfig?: Record<string, any>
   ) {
-    await fs.writeFile(path.join(tempDir, 'main.cpp'), firmwareCode);
+    const srcDir = path.join(tempDir, 'src');
+    await fs.mkdir(srcDir, { recursive: true });
+
+    await fs.writeFile(path.join(srcDir, 'main.cpp'), firmwareCode);
 
     const headerSource = path.join(__dirname, '../../templates/base-firmware/roidOTA.h');
-    await fs.copyFile(headerSource, path.join(tempDir, 'roidOTA.h'));
+    await fs.copyFile(headerSource, path.join(srcDir, 'roidOTA.h'));
 
     const platformioIni = await this.generatePlatformioConfig(deviceId, deviceConfig);
     await fs.writeFile(path.join(tempDir, 'platformio.ini'), platformioIni);
   }
 
+
   private async generatePlatformioConfig(deviceId: string, deviceConfig?: Record<string, any>): Promise<string> {
-    
+
     const templatePath = path.join(__dirname, `../../templates/base-firmware/platformio.ini`);
     let template = await fs.readFile(templatePath, 'utf-8');
 
     // Replace placeholders
     template = template.replace('{{DEVICE_ID}}', deviceId);
     template = template.replace('{{HEARTBEAT_INTERVAL}}', (deviceConfig?.heartbeatInterval || 30000).toString());
-    
+
     // Handle extra build flags
-    const extraBuildFlags = deviceConfig?.buildFlags ? 
+    const extraBuildFlags = deviceConfig?.buildFlags ?
       deviceConfig.buildFlags.map((flag: string) => `    ${flag}`).join('\n') : '';
     template = template.replace('{{EXTRA_BUILD_FLAGS}}', extraBuildFlags);
-    
+
     // Handle extra configuration
     template = template.replace('{{EXTRA_CONFIG}}', deviceConfig?.extraConfig || '');
 

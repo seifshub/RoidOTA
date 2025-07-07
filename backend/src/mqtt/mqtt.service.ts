@@ -24,7 +24,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     }); 
 
     this.client.on('connect', () => {
-      this.logger.log('Connected to MQTT broker');
+      this.logger.log(`Connected to MQTT broker at ${brokerUrl}`);
       
       // Subscribe to all relevant topics
       this.client.subscribe(MQTT_TOPICS.REQUEST);
@@ -132,7 +132,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   private handleDeviceStatus(topic: string, message: string) {
     try {
       const deviceId = topic.replace(MQTT_TOPICS.STATUS, '');
-      const status = JSON.parse(message);
+      const status = JSON.parse(message.trim());
       
       this.deviceStatuses.set(deviceId, {
         deviceId,

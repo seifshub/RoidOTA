@@ -26,9 +26,6 @@ void setup() {
   mqttClient.setBufferSize(512);
   
   connectToMQTT();
-  
-  // User setup code
-  {{USER_SETUP}}
 }
 
 // =========================
@@ -45,9 +42,6 @@ void loop() {
     sendHeartbeat();
     lastHeartbeat = millis();
   }
-  
-  // User loop code
-  {{USER_LOOP}}
 }
 
 // =========================
@@ -77,8 +71,8 @@ void connectToMQTT() {
       Serial.println("connected");
       
       // Subscribe to relevant topics
-      mqttClient.subscribe(TOPIC_RESPONSE);
-      mqttClient.subscribe(TOPIC_CMD);
+      mqttClient.subscribe("roidota/response/");
+      mqttClient.subscribe("roidota/cmd/");
       
       // Send initial request
       sendOtaRequest();
@@ -111,9 +105,9 @@ void callback(char* topic, byte* payload, unsigned int length) {
   Serial.printf("Message received on topic: %s\n", topic);
   Serial.printf("Message: %s\n", message.c_str());
   
-  if (strcmp(topic, TOPIC_RESPONSE) == 0) {
+  if (strcmp(topic, "roidota/response/") == 0) {
     handleOtaResponse(message);
-  } else if (strcmp(topic, TOPIC_CMD) == 0) {
+  } else if (strcmp(topic, "roidota/cmd/") == 0) {
     handleCommand(message);
   }
 }
@@ -135,7 +129,7 @@ void sendHeartbeat() {
   char buffer[256];
   serializeJson(doc, buffer);
   
-  if (mqttClient.publish(TOPIC_STATUS, buffer)) {
+  if (mqttClient.publish("roidota/status/", buffer)) {
     Serial.println("Heartbeat sent");
   } else {
     Serial.println("Failed to send heartbeat");
@@ -211,7 +205,7 @@ void sendOtaAck(bool success, const char* message) {
   char buffer[256];
   serializeJson(doc, buffer);
   
-  mqttClient.publish(TOPIC_ACK, buffer);
+  mqttClient.publish("roidota/ack/", buffer);
 }
 
 // =========================
@@ -246,7 +240,7 @@ void sendLog(const char* level, const char* message) {
   char buffer[256];
   serializeJson(doc, buffer);
   
-  mqttClient.publish(TOPIC_LOGS, buffer);
+  mqttClient.publish("roidota/logs/", buffer);
 }
 
 // =========================
@@ -263,8 +257,3 @@ String getMacAddress() {
 unsigned long getUptime() {
   return millis() - bootTime;
 }
-
-// =========================
-//  User Functions
-// =========================
-{{USER_FUNCTIONS}}
