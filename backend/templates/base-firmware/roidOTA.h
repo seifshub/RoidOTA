@@ -3,7 +3,8 @@
 
 #include <WiFiManager.h>
 #include <PubSubClient.h>
-#include <HTTPUpdate.h>
+#include <Update.h>
+#include<HTTPClient.h>
 #include <WiFiClient.h>
 #include <ArduinoJson.h>
 
@@ -19,8 +20,8 @@
 //  Configuration
 // =========================
 const char* device_id = DEVICE_ID;
-const char* mqtt_server = "{{MQTT_SERVER}}";  
-const char* firmware_base_url = "http://{{MQTT_SERVER}}/firmware/";
+const char* mqtt_server = "192.168.1.162";  
+const char* firmware_base_url = "http://192.168.1.162/firmware/";
 
 // =========================
 //  MQTT Topics

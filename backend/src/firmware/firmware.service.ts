@@ -84,7 +84,7 @@ export class FirmwareService {
 
   async deployToDevice(deviceId: string, firmwareName: string) {
     try {
-      const firmwareUrl = `${this.configService.get('app.baseUrl')}/firmware/${firmwareName}`;
+      const firmwareUrl = `${this.configService.get('app.baseUrl')}/firmware/${firmwareName}.bin`;
       await this.mqttService.publishFirmwareResponse(deviceId, firmwareUrl);
       
       this.logger.log(`Deployed firmware ${firmwareName} to device ${deviceId}`);

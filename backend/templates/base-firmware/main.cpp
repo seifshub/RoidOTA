@@ -1,5 +1,6 @@
 #include "roidOTA.h"
 
+
 // =========================
 //  Global Variables
 // =========================
@@ -171,33 +172,68 @@ void handleOtaResponse(String message) {
   }
 }
 
-void performOTA(const String& firmware_url) {
-  sendLog("INFO", "Starting OTA update");
-  
-  HTTPUpdate httpUpdate;
-  httpUpdate.setLedPin(2, LOW);
-  
-  WiFiClient client;
-  t_httpUpdate_return ret = httpUpdate.update(client, firmware_url);
-  
-  switch (ret) {
-    case HTTP_UPDATE_FAILED:
-      sendOtaAck(false, httpUpdate.getLastErrorString().c_str());
-      sendLog("ERROR", ("OTA failed: " + httpUpdate.getLastErrorString()).c_str());
-      break;
-      
-    case HTTP_UPDATE_NO_UPDATES:
-      sendOtaAck(false, "No updates available");
-      sendLog("INFO", "No updates available");
-      break;
-      
-    case HTTP_UPDATE_OK:
-      sendOtaAck(true, "OTA update successful");
-      sendLog("INFO", "OTA update successful, restarting...");
-      ESP.restart();
-      break;
+void performOTA(const String& binURL) {
+  Serial.printf("Performing OTA from URL: %s\n", binURL.c_str());
+  sendLog("INFO", ("Starting OTA from: " + binURL).c_str());
+  sendOtaAck(false, "Starting OTA...");
+
+  HTTPClient http;
+  http.begin(binURL);
+  int httpCode = http.GET();
+
+  if (httpCode != 200) {
+    String err = "HTTP GET failed, code: " + String(httpCode);
+    sendLog("ERROR", err.c_str());
+    sendOtaAck(false, err.c_str());
+    http.end();
+    return;
   }
+
+  int contentLength = http.getSize();
+  if (contentLength <= 0) {
+    sendLog("ERROR", "Content-Length invalid or zero");
+    sendOtaAck(false, "No content in update");
+    http.end();
+    return;
+  }
+
+  bool canBegin = Update.begin(contentLength);
+  if (!canBegin) {
+    sendLog("ERROR", "Not enough space for OTA");
+    sendOtaAck(false, "Insufficient flash space");
+    http.end();
+    return;
+  }
+
+  WiFiClient& stream = http.getStream();
+  size_t written = Update.writeStream(stream);
+
+  if (written == contentLength) {
+    if (Update.end()) {
+      if (Update.isFinished()) {
+        sendLog("INFO", "OTA update successful. Restarting...");
+        sendOtaAck(true, "OTA update complete");
+        delay(1000);
+        ESP.restart();
+      } else {
+        sendLog("ERROR", "Update not finished properly");
+        sendOtaAck(false, "OTA incomplete");
+      }
+    } else {
+      String err = "Update.end() failed: " + String(Update.getError());
+      sendLog("ERROR", err.c_str());
+      sendOtaAck(false, err.c_str());
+    }
+  } else {
+    String err = "Write failed: " + String(written) + "/" + String(contentLength);
+    sendLog("ERROR", err.c_str());
+    sendOtaAck(false, err.c_str());
+    Update.end();
+  }
+
+  http.end();
 }
+
 
 void sendOtaAck(bool success, const char* message) {
   if (!mqttClient.connected()) return;

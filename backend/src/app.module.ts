@@ -9,9 +9,15 @@ import { CompilationModule } from './compilation/compilation.module';
 import { StorageModule } from './storage/storage.module';
 import configuration from './config/configuration';
 import { validationSchema } from './config/validation';
+import { ServeStaticModule } from '@nestjs/serve-static';
+import { join } from 'path';
 
 @Module({
   imports: [
+    ServeStaticModule.forRoot({
+      rootPath: join(__dirname, '..', 'public'), 
+      serveRoot: '/', 
+    }),
     ConfigModule.forRoot({
       isGlobal: true,
       load: [configuration],
