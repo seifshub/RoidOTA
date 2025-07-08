@@ -81,8 +81,8 @@ void connectToMQTT() {
       Serial.println("connected");
       
       // Subscribe to relevant topics
-      mqttClient.subscribe("roidota/response/");
-      mqttClient.subscribe("roidota/cmd/");
+      mqttClient.subscribe(TOPIC_RESPONSE);
+      mqttClient.subscribe(TOPIC_CMD);
       
       // Send initial request
       sendOtaRequest();
@@ -115,9 +115,9 @@ void callback(char* topic, byte* payload, unsigned int length) {
   Serial.printf("Message received on topic: %s\n", topic);
   Serial.printf("Message: %s\n", message.c_str());
   
-  if (strcmp(topic, "roidota/response/") == 0) {
+  if (strcmp(topic, TOPIC_RESPONSE) == 0) {
     handleOtaResponse(message);
-  } else if (strcmp(topic, "roidota/cmd/") == 0) {
+  } else if (strcmp(topic, TOPIC_CMD) == 0) {
     handleCommand(message);
   }
 }
@@ -139,7 +139,7 @@ void sendHeartbeat() {
   char buffer[256];
   serializeJson(doc, buffer);
   
-  if (mqttClient.publish("roidota/status/", buffer)) {
+  if (mqttClient.publish(TOPIC_STATUS, buffer)) {
     Serial.println("Heartbeat sent");
   } else {
     Serial.println("Failed to send heartbeat");
@@ -160,7 +160,7 @@ void sendOtaRequest() {
   char buffer[256];
   serializeJson(doc, buffer);
   
-  if (mqttClient.publish("roidota/request", buffer)) {
+  if (mqttClient.publish(TOPIC_REQUEST, buffer)) {
     Serial.println("OTA request sent");
   }
 }
@@ -187,7 +187,7 @@ void performOTA(const String& binURL) {
   if (httpCode != 200) {
     String err = "HTTP GET failed, code: " + String(httpCode);
     sendLog("ERROR", err.c_str());
-    sendOtaAck(false, err.c_str());
+    sendOtaAck(false, err.c_str());   
     http.end();
     return;
   }
@@ -250,7 +250,7 @@ void sendOtaAck(bool success, const char* message) {
   char buffer[256];
   serializeJson(doc, buffer);
   
-  mqttClient.publish("roidota/ack/", buffer);
+  mqttClient.publish(TOPIC_ACK, buffer);
 }
 
 // =========================
@@ -285,7 +285,7 @@ void sendLog(const char* level, const char* message) {
   char buffer[256];
   serializeJson(doc, buffer);
   
-  mqttClient.publish("roidota/logs/", buffer);
+  mqttClient.publish(TOPIC_LOGS, buffer);
 }
 
 // =========================

@@ -43,7 +43,7 @@ export class CompilationService {
       const binaryPath = await this.compileFirmware(tempDir);
       const finalBinaryPath = await this.storageService.saveFirmware(firmwareName, binaryPath);
 
-      // await fs.rm(tempDir, { recursive: true, force: true });
+      await fs.rm(tempDir, { recursive: true, force: true });
 
       this.logger.log(`Successfully compiled firmware for device ${deviceId}`);
 
