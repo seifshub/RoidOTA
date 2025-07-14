@@ -3,6 +3,11 @@
 // Initialize static members
 RoidStatus RoidOTA::currentStatus = RoidStatus::BOOTING;
 
+// ========== MQTT Client Access ==========
+PubSubClient& RoidOTA::mqtt() {
+  return mqttClient;
+}
+
 // ========== Status Management ==========
 RoidStatus RoidOTA::status() {
   return currentStatus;
@@ -281,4 +286,26 @@ void RoidOTA::sendOtaAck(bool success, const char* msg) {
 // ========== Utilities ==========
 unsigned long RoidOTA::getUptime() {
   return millis() - bootTime;
+}
+
+bool RoidOTA::isRoidTopic(const char* topic) {
+  return strncmp(topic, "roidota/", 8) == 0; 
+}
+
+void RoidOTA::handleInternalMessage(const char* topic, const byte* payload, unsigned int length) {
+  String message;
+  for (unsigned int i = 0; i < length; i++) {
+    message += (char)payload[i];
+  }
+
+  String base = String("roidota/");
+  String id = String(deviceId);
+
+  if (String(topic) == base + "response/" + id) {
+    handleOtaResponse(message);
+  } else if (String(topic) == base + "cmd/" + id) {
+    handleCommand(message);
+  } else {
+    Serial.printf("[RoidOTA] Unknown internal topic: %s\n", topic);
+  }
 }

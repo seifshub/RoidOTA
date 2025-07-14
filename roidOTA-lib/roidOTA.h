@@ -23,6 +23,11 @@ public:
   static void begin(const char* id, UserFunction setupFn, UserFunction loopFn);
   static void loop();
   static void handle();
+  static bool isRoidTopic(const char* topic);
+  static void handleInternalMessage(const char* topic, const byte* payload, unsigned int length);
+
+  // MQTT client access method 
+  static PubSubClient& mqtt();
   
   // Status tracking methods
   static RoidStatus status();
@@ -47,6 +52,7 @@ private:
   static void sendOtaAck(bool success, const char* message);
   static void sendLog(const char* level, const char* message);
   static unsigned long getUptime();
+  
 
   // Static member variables
   static inline const char* deviceId = "esp_x";
