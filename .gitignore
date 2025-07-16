@@ -109,3 +109,5 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
 backend/firmware_manifest.json
 
+.DS_Store
+.DS_Store
