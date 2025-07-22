@@ -10,14 +10,14 @@ import { CompileFirmwareDto } from './dtos/compile-firmware.dto';
 @Injectable()
 export class FirmwareService {
 
-    private readonly logger = new Logger(FirmwareService.name);
+  private readonly logger = new Logger(FirmwareService.name);
 
-    constructor(
+  constructor(
     private readonly mqttService: MqttService,
     private readonly compilationService: CompilationService,
     private readonly storageService: StorageService,
     private readonly configService: ConfigService,
-  ) {}
+  ) { }
 
   async getManifest(): Promise<Record<string, string>> {
     return this.storageService.loadManifest();
@@ -32,12 +32,12 @@ export class FirmwareService {
     }
   }
 
-   async processUserCode(file: Express.Multer.File, uploadDto: UploadFirmwareDto) {
+  async processUserCode(file: Express.Multer.File, uploadDto: UploadFirmwareDto) {
     try {
       this.logger.log(`Processing user code for devices: ${uploadDto.targetDevices.join(', ')}`);
 
       const userCode = file.buffer.toString('utf-8');
-      
+
       const compilationResults: {
         success: boolean;
         deviceId: string;
@@ -50,7 +50,7 @@ export class FirmwareService {
         const result = await this.compilationService.compileForDevice({
           deviceId,
           userCode,
-          firmwareName: uploadDto.firmwareName || `firmware_${deviceId}_${Date.now()}`,
+          firmwareName: uploadDto.firmwareName || `firmware_${deviceId}`,
           deviceConfig: uploadDto.deviceConfigs?.[deviceId] || {},
         });
 
@@ -58,7 +58,7 @@ export class FirmwareService {
 
         // Update manifest
         const manifest = await this.getManifest();
-        manifest[deviceId] = result.firmwareName;
+        manifest[deviceId] = `${result.firmwareName}.bin`;
         await this.updateManifest(manifest);
       }
 
@@ -86,9 +86,9 @@ export class FirmwareService {
     try {
       const firmwareUrl = `${this.configService.get('app.baseUrl')}/firmware/${firmwareName}.bin`;
       await this.mqttService.publishFirmwareResponse(deviceId, firmwareUrl);
-      
+
       this.logger.log(`Deployed firmware ${firmwareName} to device ${deviceId}`);
-      
+
       return {
         status: 'success',
         message: `Firmware deployed to ${deviceId}`,
@@ -129,13 +129,13 @@ export class FirmwareService {
   async sendDeviceCommand(deviceId: string, command: string, params?: Record<string, any>) {
     try {
       await this.mqttService.sendCommand(deviceId, command, params);
-      
+
       this.logger.log(`Sent command '${command}' to device ${deviceId}`);
-      
+
       return {
         status: 'success',
         message: `Command sent to ${deviceId}`,
-        deviceId, 
+        deviceId,
         command,
       };
     } catch (error) {
@@ -143,12 +143,74 @@ export class FirmwareService {
       throw new HttpException('Command failed', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
+  async sendTest(deviceId: string, message: string) {
+    try {
+      await this.mqttService.sendTest(deviceId, message);
 
+      this.logger.log(`Sent test message to device ${deviceId}`);
+
+      return {
+        status: 'success',
+        message: `Test message sent to ${deviceId}`,
+        deviceId,
+      };
+    } catch (error) {
+      this.logger.error(`Failed to send test message to device ${deviceId}`, error);
+      throw new HttpException('Test message failed', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
   async restartDevice(deviceId: string) {
     return this.sendDeviceCommand(deviceId, 'restart');
   }
 
   async requestDeviceHeartbeat(deviceId: string) {
     return this.sendDeviceCommand(deviceId, 'heartbeat');
+  }
+
+
+  async uploadBin(file: Express.Multer.File, firmwareName: string) {
+    try {
+      const finalPath = await this.storageService.saveFirmware(firmwareName, file.buffer);
+      return {
+        status: 'success',
+        message: `Firmware ${firmwareName} uploaded successfully`,
+        firmwareName,
+      }
+    } catch( error ) {
+      this.logger.error('Failed to save uploaded .bin', error);
+      throw new HttpException('Failed to upload binary', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
+  async uploadAndDeployBin(file: Express.Multer.File, uploadDto: UploadFirmwareDto) {
+    const firmwareName = uploadDto.firmwareName || `firmware_${Date.now()}`;
+
+    try {
+      const finalPath = await this.storageService.saveFirmware(firmwareName, file.buffer);
+
+      const manifest = await this.getManifest();
+
+      if (uploadDto.targetDevices?.length) {
+        for (const deviceId of uploadDto.targetDevices) {
+          manifest[deviceId] = firmwareName;
+        }
+      }
+
+      await this.updateManifest(manifest);
+
+      if (uploadDto.autoDeploy && uploadDto.targetDevices?.length) {
+        await this.batchDeploy(uploadDto.targetDevices, firmwareName);
+      }
+
+      return {
+        status: 'success',
+        message: `Firmware ${firmwareName} uploaded`,
+        firmwareName,
+        path: finalPath,
+      };
+    } catch (error) {
+      this.logger.error('Failed to save uploaded .bin', error);
+      throw new HttpException('Failed to upload binary', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
   }
 }

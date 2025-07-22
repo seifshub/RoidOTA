@@ -86,6 +86,8 @@ void connectToMQTT() {
       
       // Send initial request
       sendOtaRequest();
+      sendHeartbeat();
+      lastHeartbeat = millis();
       
     } else {
       Serial.print("failed, rc=");
@@ -154,7 +156,7 @@ void sendOtaRequest() {
   
   StaticJsonDocument<256> doc;
   doc["device_id"] = device_id;
-  doc["ip"] = WiFi.localIP().toString();
+  doc["mac_address"] = WiFi.macAddress();
   doc["timestamp"] = millis();
   
   char buffer[256];

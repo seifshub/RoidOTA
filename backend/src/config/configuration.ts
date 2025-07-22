@@ -22,9 +22,12 @@ const configuration = () => ({
     outputDir: process.env.OUTPUT_DIR || './compiled',
   },
   storage: {
-    firmwareDir: process.env.FIRMWARE_DIR || './firmware',
+    firmwareDir: process.env.FIRMWARE_DIR || './public/firmware',
     manifestPath: process.env.MANIFEST_PATH || './firmware_manifest.json',
   },
+  database: {
+    databaseUrl: process.env.DATABASE_URL,
+  }
 });
 
 export type AppConfig = ReturnType<typeof configuration>;

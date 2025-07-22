@@ -25,15 +25,21 @@ export class StorageService {
     await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2));
   }
 
-  async saveFirmware(firmwareName: string, sourcePath: string): Promise<string> {
+  async saveFirmware(firmwareName: string, source: string | Buffer): Promise<string> {
     const firmwareDir = this.configService.get('storage.firmwareDir');
     await fs.mkdir(firmwareDir, { recursive: true });
 
     const finalPath = path.join(firmwareDir, `${firmwareName}.bin`);
-    await fs.copyFile(sourcePath, finalPath);
+
+    if (Buffer.isBuffer(source)) {
+      await fs.writeFile(finalPath, source);
+    } else {
+      await fs.copyFile(source, finalPath);
+    }
 
     return finalPath;
   }
+
 
   async deleteFirmware(firmwareName: string): Promise<void> {
     const firmwareDir = this.configService.get('storage.firmwareDir');
@@ -80,7 +86,7 @@ export class StorageService {
       'build-logs'
     );
     await fs.mkdir(logsDir, { recursive: true });
-    
+
     const logPath = path.join(logsDir, `${buildId}.log`);
     await fs.writeFile(logPath, log);
   }

@@ -11,6 +11,7 @@ import configuration from './config/configuration';
 import { validationSchema } from './config/validation';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
+import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { join } from 'path';
     MulterModule.register({
       dest: './uploads',
     }),
+    ScheduleModule.forRoot(),
     FirmwareModule,
     MqttModule,
     CompilationModule,
