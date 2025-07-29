@@ -7,16 +7,20 @@ import {
   MQTT_TOPICS,
 } from './types';
 import { Cron } from '@nestjs/schedule';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import { DeviceService } from 'src/device/device.service';
+import { StorageService } from 'src/storage/storage.service';
 
 @Injectable()
 export class MqttService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(MqttService.name);
   private client: mqtt.MqttClient;
   private deviceStatuses: Map<string, DeviceStatus> = new Map();
-  private firmwareManifest: Record<string, string> = {};
 
-  constructor(private readonly configService: ConfigService) { }
+  constructor(
+    private readonly configService: ConfigService, 
+    private readonly deviceService: DeviceService,
+    private readonly storageService: StorageService,
+  ) {}
 
   async onModuleInit() {
     const brokerUrl = `mqtt://${this.configService.get('mqtt.broker')}:${this.configService.get('mqtt.port')}`;
@@ -30,10 +34,25 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       this.logger.log(`Connected to MQTT broker at ${brokerUrl}`);
 
       // Subscribe to all relevant topics
-      this.client.subscribe(MQTT_TOPICS.REQUEST);
-      this.client.subscribe(`${MQTT_TOPICS.STATUS}+`);
-      this.client.subscribe(`${MQTT_TOPICS.LOGS}+`);
-      this.client.subscribe(`${MQTT_TOPICS.ACK}+`);
+      this.client.subscribe(MQTT_TOPICS.REQUEST, (err) => {
+        if (err) this.logger.error(`Failed to subscribe to ${MQTT_TOPICS.REQUEST}`, err);
+        else this.logger.log(`Subscribed to ${MQTT_TOPICS.REQUEST}`);
+      });
+      
+      this.client.subscribe(`${MQTT_TOPICS.STATUS}+`, (err) => {
+        if (err) this.logger.error(`Failed to subscribe to ${MQTT_TOPICS.STATUS}+`, err);
+        else this.logger.log(`Subscribed to ${MQTT_TOPICS.STATUS}+`);
+      });
+      
+      this.client.subscribe(`${MQTT_TOPICS.LOGS}+`, (err) => {
+        if (err) this.logger.error(`Failed to subscribe to ${MQTT_TOPICS.LOGS}+`, err);
+        else this.logger.log(`Subscribed to ${MQTT_TOPICS.LOGS}+`);
+      });
+      
+      this.client.subscribe(`${MQTT_TOPICS.ACK}+`, (err) => {
+        if (err) this.logger.error(`Failed to subscribe to ${MQTT_TOPICS.ACK}+`, err);
+        else this.logger.log(`Subscribed to ${MQTT_TOPICS.ACK}+`);
+      });
     });
 
     this.client.on('message', (topic, payload) => {
@@ -43,9 +62,6 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     this.client.on('error', (error) => {
       this.logger.error('MQTT connection error', error);
     });
-
-    // Load firmware manifest on startup
-    await this.loadFirmwareManifest();
   }
 
   async onModuleDestroy() {
@@ -54,28 +70,14 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async loadFirmwareManifest(): Promise<void> {
+  private async getCurrentFirmware(deviceId: string): Promise<string | null> {
     try {
-      const manifestPath = this.configService.get('storage.manifestPath');
-      const fs = await import('fs/promises');
-      const data = await fs.readFile(manifestPath, 'utf-8');
-      this.firmwareManifest = JSON.parse(data);
-      this.logger.log('Firmware manifest loaded successfully');
+      const device = await this.deviceService.findByDeviceId(deviceId);
+      return device?.currentFirmware || null;
     } catch (error) {
-      this.logger.warn('Could not load firmware manifest, using empty manifest');
-      this.firmwareManifest = {};
+      this.logger.error(`Failed to get current firmware for device ${deviceId}`, error);
+      return null;
     }
-  }
-
-  async updateFirmwareManifest(manifest: Record<string, string>): Promise<void> {
-    this.firmwareManifest = { ...manifest };
-    this.logger.log('Firmware manifest updated');
-  }
-
-  private getFirmwareName(deviceId: string): string {
-    const firmwareName = this.firmwareManifest[deviceId];
-
-    return firmwareName ? firmwareName : 'unknown';
   }
 
   async publish(topic: string, message: string): Promise<void> {
@@ -94,11 +96,11 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
 
   async publishFirmwareResponse(deviceId: string, firmwareUrl: string): Promise<void> {
     const topic = `${MQTT_TOPICS.RESPONSE}${deviceId}`;
-    const firmwareName = this.getFirmwareName(deviceId);
+    const currentFirmware = await this.getCurrentFirmware(deviceId);
 
     const message = JSON.stringify({
       firmware_url: firmwareUrl,
-      current_firmware: firmwareName,
+      current_firmware: currentFirmware || 'unknown',
       timestamp: Date.now(),
       device_id: deviceId
     });
@@ -123,25 +125,17 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   }
 
   getDeviceStatuses(): DeviceStatus[] {
-    return Array.from(this.deviceStatuses.values()).map(status => ({
-      ...status,
-      firmwareName: this.getFirmwareName(status.deviceId)
-    }));
+    return Array.from(this.deviceStatuses.values());
   }
 
   getDeviceStatus(deviceId: string): DeviceStatus | undefined {
-    const status = this.deviceStatuses.get(deviceId);
-    if (status) {
-      return {
-        ...status,
-        firmwareName: this.getFirmwareName(status.deviceId)
-      };
-    }
-    return undefined;
+    return this.deviceStatuses.get(deviceId);
   }
 
   private handleMessage(topic: string, message: string) {
     try {
+      this.logger.debug(`Received MQTT message on topic: ${topic}, message: ${message}`);
+      
       if (topic === MQTT_TOPICS.REQUEST) {
         this.handleDeviceRequest(message);
       } else if (topic.startsWith(MQTT_TOPICS.STATUS)) {
@@ -149,45 +143,44 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       } else if (topic.startsWith(MQTT_TOPICS.LOGS)) {
         this.handleDeviceLogs(topic, message);
       } else if (topic.startsWith(MQTT_TOPICS.ACK)) {
+        this.logger.debug(`Calling handleDeviceAck for topic: ${topic}`);
         this.handleDeviceAck(topic, message);
+      } else {
+        this.logger.warn(`Unhandled MQTT topic: ${topic}`);
       }
     } catch (error) {
       this.logger.error(`Error handling message from ${topic}`, error);
     }
   }
 
-  private handleDeviceRequest(message: string) {
+  private async handleDeviceRequest(message: string) {
     try {
       const request: DeviceRequest = JSON.parse(message);
       this.logger.log(`Device request from ${request.device_id}: ${message}`);
 
-      // Get firmware info for this device
-      const firmwareName = this.getFirmwareName(request.device_id);
+      await this.deviceService.findOrCreateDevice(request.device_id, request.ip);
 
-      // Update device status
+      const currentFirmware = await this.getCurrentFirmware(request.device_id);
+
       const existingStatus = this.deviceStatuses.get(request.device_id) || {} as DeviceStatus;
       this.deviceStatuses.set(request.device_id, {
         ...existingStatus,
         deviceId: request.device_id,
         ip: request.ip,
         lastSeen: new Date(),
-        firmwareName: firmwareName
       });
 
-      // Trigger firmware lookup and response
-      // This will be handled by the firmware service
     } catch (error) {
-      this.logger.error('Failed to parse device request', error);
+      this.logger.error('Failed to handle device request', error);
     }
   }
 
-  private handleDeviceStatus(topic: string, message: string) {
+  private async handleDeviceStatus(topic: string, message: string) {
     try {
       const deviceId = topic.replace(MQTT_TOPICS.STATUS, '');
       const status = JSON.parse(message.trim());
 
-      // Get firmware info for this device
-      const firmwareName = this.getFirmwareName(deviceId);
+      const currentFirmware = await this.getCurrentFirmware(deviceId);
 
       this.deviceStatuses.set(deviceId, {
         deviceId,
@@ -198,10 +191,9 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
         uptime: status.uptime,
         freeHeap: status.free_heap,
         lastSeen: new Date(),
-        firmwareName: firmwareName,
       });
 
-      this.logger.debug(`Status update from ${deviceId}: RSSI=${status.rssi}, Uptime=${status.uptime}ms, Firmware=${firmwareName}`);
+      this.logger.debug(`Status update from ${deviceId}: RSSI=${status.rssi}, Uptime=${status.uptime}ms, Firmware=${currentFirmware}`);
     } catch (error) {
       this.logger.error(`Failed to parse device status from ${topic}`, error);
     }
@@ -213,22 +205,24 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       const logData = JSON.parse(message);
 
       this.logger.log(`[${deviceId}] ${logData.level}: ${logData.message}`);
+      
     } catch (error) {
       this.logger.error(`Failed to parse device logs from ${topic}`, error);
     }
   }
 
-  private handleDeviceAck(topic: string, message: string) {
+  private async handleDeviceAck(topic: string, message: string) {
     try {
       const deviceId = topic.replace(MQTT_TOPICS.ACK, '');
       const ackData = JSON.parse(message);
-
+      this.logger.log(`success: ${ackData.success}, message: ${ackData.message}, status: ${ackData.status}, timestamp: ${ackData.timestamp}`);
       if (ackData.success) {
-        this.logger.log(`OTA update successful for device ${deviceId}`);
-        // Reload manifest after successful OTA update
-        this.loadFirmwareManifest();
+        this.logger.log(`OTA update successful for device ${deviceId} (status: ${ackData.status || 'unknown'}, timestamp: ${ackData.timestamp || 'unknown'})`);
+        await this.storageService.updateDeploymentStatus(deviceId, 'SUCCESS');
       } else {
-        this.logger.error(`OTA update failed for device ${deviceId}: ${ackData.message}`);
+        const errorMessage = ackData.message || 'Unknown error';
+        this.logger.error(`OTA update failed for device ${deviceId}: ${errorMessage} (status: ${ackData.status || 'unknown'})`);
+        await this.storageService.updateDeploymentStatus(deviceId, 'FAILED', errorMessage);
       }
     } catch (error) {
       this.logger.error(`Failed to parse device acknowledgment from ${topic}`, error);
@@ -248,7 +242,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   }
 
   @Cron('*/30 * * * * *')  // 30 seconds
-  checkDeviceExpirations() {
+  async checkDeviceExpirations() {
     const now = Date.now();
     const offlineThreshold = 60000; // 60 seconds
 
@@ -258,9 +252,17 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       if (now - lastSeen > offlineThreshold && status.status !== 'offline') {
         status.status = 'offline';
         this.deviceStatuses.set(deviceId, status);
-        // Optionally: Emit event if you want to notify others
-        // this.eventEmitter.emit('device.status.changed', status);
+        
+        
       }
     }
+  }
+
+  @Cron('*/60 * * * * *') // Every minute
+  async checkPendingDeployments() {
+    const timeout = 5 * 60 * 1000; // 5 minutes
+    const cutoff = new Date(Date.now() - timeout);
+    
+    await this.storageService.timeoutPendingDeployments(cutoff);
   }
 }

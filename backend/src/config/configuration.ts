@@ -27,7 +27,14 @@ const configuration = () => ({
   },
   database: {
     databaseUrl: process.env.DATABASE_URL,
-  }
+  },
+  s3: {
+    endpoint: process.env.S3_ENDPOINT,
+    accessKeyId: process.env.S3_ACCESS_KEY,
+    secretAccessKey: process.env.S3_SECRET_KEY,
+    bucketName: process.env.S3_BUCKET_NAME || 'roidota-fw',
+    region: process.env.S3_REGION || 'us-east-1',
+  },
 });
 
 export type AppConfig = ReturnType<typeof configuration>;

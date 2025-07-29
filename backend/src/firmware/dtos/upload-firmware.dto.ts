@@ -20,21 +20,14 @@ export class UploadFirmwareDto {
   @IsString()
   firmwareName?: string;
 
+  @ApiProperty({ description: 'Firmware version', required: false })
+  @IsOptional() 
+  @IsString()
+  version?: string;
+
   @ApiProperty({ description: 'Auto-deploy after compilation', required: false })
   @Transform(({ value }) => value === 'true' || value === true)
   @IsOptional()
   @IsBoolean()
   autoDeploy?: boolean;
-
-  @ApiProperty({ description: 'Device-specific configurations', required: false })
-  @Transform(({ value }) => {
-    try {
-      return JSON.parse(value);
-    } catch {
-      return value;
-    }
-  })
-  @IsOptional()
-  @IsObject()
-  deviceConfigs?: Record<string, any>;
 }

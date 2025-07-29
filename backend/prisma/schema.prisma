@@ -1,0 +1,59 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Firmware {
+  id         String            @id @default(uuid())
+  name       String
+  version    String
+  s3Url      String
+  uploadedAt DateTime          @default(now())
+  devices    FirmwareHistory[]
+  Device     Device[]
+
+  @@map("firmware")
+}
+
+model Device {
+  id        String            @id @default(uuid())
+  deviceId  String            @unique
+  ip        String?
+  lastSeen  DateTime?
+  createdAt DateTime          @default(now())
+  firmware  FirmwareHistory[]
+
+  currentFirmware   Firmware? @relation(fields: [currentFirmwareId], references: [id])
+  currentFirmwareId String?
+
+  @@map("devices")
+}
+
+enum DeploymentStatus {
+  PENDING
+  IN_PROGRESS
+  SUCCESS
+  FAILED
+  TIMEOUT
+}
+
+model FirmwareHistory {
+  id           String           @id @default(uuid())
+  device       Device           @relation(fields: [deviceId], references: [id])
+  deviceId     String
+  firmware     Firmware         @relation(fields: [firmwareId], references: [id])
+  firmwareId   String
+  appliedAt    DateTime         @default(now())
+  status       DeploymentStatus @default(PENDING)
+  completedAt  DateTime?
+  errorMessage String?
+
+  @@map("firmware_history")
+}

@@ -7,11 +7,13 @@ import { MulterModule } from '@nestjs/platform-express';
 import { MqttModule } from './mqtt/mqtt.module';
 import { CompilationModule } from './compilation/compilation.module';
 import { StorageModule } from './storage/storage.module';
+import { PrismaModule } from './prisma/prisma.module';
 import configuration from './config/configuration';
 import { validationSchema } from './config/validation';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
 import { ScheduleModule } from '@nestjs/schedule';
+import { DeviceModule } from './device/device.module';
 
 @Module({
   imports: [
@@ -28,10 +30,12 @@ import { ScheduleModule } from '@nestjs/schedule';
       dest: './uploads',
     }),
     ScheduleModule.forRoot(),
+    PrismaModule,
     FirmwareModule,
     MqttModule,
     CompilationModule,
     StorageModule,
+    DeviceModule,
   ],
   controllers: [AppController],
   providers: [AppService],
