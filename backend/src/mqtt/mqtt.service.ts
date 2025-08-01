@@ -181,6 +181,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       const status = JSON.parse(message.trim());
 
       const currentFirmware = await this.getCurrentFirmware(deviceId);
+      const currentTime = new Date();
 
       this.deviceStatuses.set(deviceId, {
         deviceId,
@@ -190,10 +191,10 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
         rssi: status.rssi,
         uptime: status.uptime,
         freeHeap: status.free_heap,
-        lastSeen: new Date(),
+        lastSeen: currentTime,
       });
 
-      this.logger.debug(`Status update from ${deviceId}: RSSI=${status.rssi}, Uptime=${status.uptime}ms, Firmware=${currentFirmware}`);
+      this.logger.debug(`Status update from ${deviceId} at ${currentTime.toISOString()}: status=${status.status || 'online'}, RSSI=${status.rssi}, Uptime=${status.uptime}ms`);
     } catch (error) {
       this.logger.error(`Failed to parse device status from ${topic}`, error);
     }
@@ -250,10 +251,9 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       const lastSeen = new Date(status.lastSeen).getTime();
 
       if (now - lastSeen > offlineThreshold && status.status !== 'offline') {
+        this.logger.log(`Device ${deviceId} marked as offline - last seen ${Math.floor((now - lastSeen) / 1000)}s ago`);
         status.status = 'offline';
         this.deviceStatuses.set(deviceId, status);
-        
-        
       }
     }
   }
