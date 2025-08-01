@@ -5,7 +5,6 @@ import { FirmwareModule } from './firmware/firmware.module';
 import { ConfigModule } from '@nestjs/config';
 import { MulterModule } from '@nestjs/platform-express';
 import { MqttModule } from './mqtt/mqtt.module';
-import { CompilationModule } from './compilation/compilation.module';
 import { StorageModule } from './storage/storage.module';
 import { PrismaModule } from './prisma/prisma.module';
 import configuration from './config/configuration';
@@ -33,7 +32,6 @@ import { DeviceModule } from './device/device.module';
     PrismaModule,
     FirmwareModule,
     MqttModule,
-    CompilationModule,
     StorageModule,
     DeviceModule,
   ],
