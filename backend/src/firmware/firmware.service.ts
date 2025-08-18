@@ -1,6 +1,7 @@
 import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { MqttService } from '../mqtt/mqtt.service';
 import { StorageService } from '../storage/storage.service';
+import { S3Service } from '../s3/s3.service';
 import { UploadFirmwareDto } from './dtos/upload-firmware.dto';
 
 
@@ -12,6 +13,7 @@ export class FirmwareService {
   constructor(
     private readonly mqttService: MqttService,
     private readonly storageService: StorageService,
+    private readonly s3Service: S3Service,
   ) { }
 
   async deployToDevice(deviceId: string, firmwareId: string) {
@@ -29,7 +31,7 @@ export class FirmwareService {
       console.log(`Recorded deployment with ID: ${deployment.id}`);
 
       // Send firmware URL to device via MQTT
-      await this.mqttService.publishFirmwareResponse(deviceId, firmware.s3Url);
+      await this.mqttService.publishFirmwareResponse(deviceId, firmware.s3Key);
       console.log(`Sent firmware URL to device ${deviceId} via MQTT`);
 
       this.logger.log(`Initiated firmware deployment ${firmware.name} v${firmware.version} to device ${deviceId}`);
@@ -238,7 +240,7 @@ export class FirmwareService {
     try {
       const firmwareVersion = version || `v${Date.now()}`;
 
-      const { firmware } = await this.storageService.saveFirmware(
+      const { s3Key, signedUrl, firmware } = await this.storageService.saveFirmware(
         firmwareName,
         firmwareVersion,
         file.buffer
@@ -251,7 +253,7 @@ export class FirmwareService {
           id: firmware.id,
           name: firmware.name,
           version: firmware.version,
-          s3Url: firmware.s3Url,
+          s3Url: signedUrl, 
           uploadedAt: firmware.uploadedAt,
         },
       };
@@ -266,7 +268,7 @@ export class FirmwareService {
     const firmwareVersion = uploadDto.version || `v${Date.now()}`;
 
     try {
-      const { firmware } = await this.storageService.saveFirmware(
+      const { s3Key, signedUrl, firmware } = await this.storageService.saveFirmware(
         firmwareName,
         firmwareVersion,
         file.buffer
@@ -290,7 +292,7 @@ export class FirmwareService {
           id: firmware.id,
           name: firmware.name,
           version: firmware.version,
-          s3Url: firmware.s3Url,
+          s3Url: signedUrl, 
           uploadedAt: firmware.uploadedAt,
         },
       };
@@ -304,19 +306,19 @@ export class FirmwareService {
     const history = await this.storageService.getDeviceFirmwareHistory(deviceId);
     return {
       deviceId,
-      history: history.map(h => ({
+      history: await Promise.all(history.map(async h => ({
         id: h.id,
         firmware: {
           id: h.firmware.id,
           name: h.firmware.name,
           version: h.firmware.version,
-          s3Url: h.firmware.s3Url,
+          s3Url: await this.s3Service.getSignedDownloadUrl(h.firmware.s3Key, 3600),
         },
         appliedAt: h.appliedAt,
         status: h.status,
         completedAt: h.completedAt,
         errorMessage: h.errorMessage,
-      })),
+      }))),
     };
   }
 
@@ -392,13 +394,13 @@ export class FirmwareService {
     const firmwareList = await this.storageService.listFirmware();
     return {
       status: 'success',
-      firmware: firmwareList.map(f => ({
+      firmware: await Promise.all(firmwareList.map(async f => ({
         id: f.id,
         name: f.name,
         version: f.version,
-        s3Url: f.s3Url,
+        s3Url: await this.s3Service.getSignedDownloadUrl(f.s3Key, 3600),
         uploadedAt: f.uploadedAt,
-      })),
+      }))),
     };
   }
 

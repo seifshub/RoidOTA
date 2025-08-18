@@ -14,7 +14,7 @@ model Firmware {
   id         String            @id @default(uuid())
   name       String
   version    String
-  s3Url      String
+  s3Key      String            // Changed from s3Url to s3Key
   uploadedAt DateTime          @default(now())
   devices    FirmwareHistory[]
   Device     Device[]

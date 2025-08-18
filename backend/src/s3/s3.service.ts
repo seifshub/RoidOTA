@@ -25,7 +25,7 @@ export class S3Service {
     this.bucketName = s3Config.bucketName;
   }
 
-  async uploadFirmware(key: string, buffer: Buffer, contentType: string = 'application/octet-stream'): Promise<string> {
+  async uploadFirmware(key: string, buffer: Buffer, contentType: string = 'application/octet-stream'): Promise<{ s3Key: string; signedUrl: string }> {
     try {
       const command = new PutObjectCommand({
         Bucket: this.bucketName,
@@ -36,11 +36,11 @@ export class S3Service {
 
       await this.s3Client.send(command);
       
-      // Return the S3 URL
-      const s3Url = `${this.configService.get('s3.endpoint')}/${this.bucketName}/${key}`;
-      this.logger.log(`Successfully uploaded firmware to S3: ${s3Url}`);
+      // Generate a signed URL for immediate use 
+      const signedUrl = await this.getSignedDownloadUrl(key, 7200); // 2 hours expiry
+      this.logger.log(`Successfully uploaded firmware to S3: ${key}`);
       
-      return s3Url;
+      return { s3Key: key, signedUrl };
     } catch (error) {
       this.logger.error(`Failed to upload firmware to S3: ${error.message}`, error);
       throw error;

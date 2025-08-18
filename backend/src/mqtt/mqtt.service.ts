@@ -9,6 +9,7 @@ import {
 import { Cron } from '@nestjs/schedule';
 import { DeviceService } from 'src/device/device.service';
 import { StorageService } from 'src/storage/storage.service';
+import { S3Service } from 'src/s3/s3.service';
 
 @Injectable()
 export class MqttService implements OnModuleInit, OnModuleDestroy {
@@ -20,6 +21,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     private readonly configService: ConfigService, 
     private readonly deviceService: DeviceService,
     private readonly storageService: StorageService,
+    private readonly s3Service: S3Service,
   ) {}
 
   async onModuleInit() {
@@ -94,12 +96,15 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  async publishFirmwareResponse(deviceId: string, firmwareUrl: string): Promise<void> {
+  async publishFirmwareResponse(deviceId: string, s3Key: string): Promise<void> {
     const topic = `${MQTT_TOPICS.RESPONSE}${deviceId}`;
     const currentFirmware = await this.getCurrentFirmware(deviceId);
 
+    // Generate signed URL for the S3 key (valid for 1 hour)
+    const signedUrl = await this.s3Service.getSignedDownloadUrl(s3Key, 3600);
+
     const message = JSON.stringify({
-      firmware_url: firmwareUrl,
+      firmware_url: signedUrl,
       current_firmware: currentFirmware || 'unknown',
       timestamp: Date.now(),
       device_id: deviceId

@@ -20,14 +20,17 @@ enum class RoidStatus {
 
 class RoidOTA {
 public:
+  // Core methods
   static void begin(const char* id, UserFunction setupFn, UserFunction loopFn);
-  static void loop();
+  static void begin(const char* id, const char* username, const char* password, UserFunction setupFn, UserFunction loopFn);
   static void handle();
+  
+  // MQTT access method
+  static PubSubClient& mqtt();
+  
+  // Topic handling methods
   static bool isRoidTopic(const char* topic);
   static void handleInternalMessage(const char* topic, const byte* payload, unsigned int length);
-
-  // MQTT client access method 
-  static PubSubClient& mqtt();
   
   // Status tracking methods
   static RoidStatus status();
@@ -35,15 +38,31 @@ public:
 
 private:
   static RoidStatus currentStatus;
+  static WiFiClient espClient;
+  static PubSubClient mqttClient;
+  static const char* deviceId;
+  static const char* mqttUsername;
+  static const char* mqttPassword;
+  static UserFunction userSetup;
+  static UserFunction userLoop;
+  static unsigned long bootTime;
+  static unsigned long lastHeartbeat;
+  static unsigned long lastReconnect;
+
+  static String topicStatus;
+  static String topicResponse;
+  static String topicCmd;
+  static String topicAck;
+  static String topicLogs;  
   
-  // Helper method for status management
+  // Helper methods
   static void setStatus(RoidStatus newStatus);
-  
-  // Existing private methods
+  static const char* getStatusStr(RoidStatus status);
   static void connectWiFi();
   static void connectMQTT();
   static void reconnectMQTT();
   static void callback(char* topic, byte* payload, unsigned int length);
+
   static void sendHeartbeat();
   static void sendOtaRequest();
   static void performOTA(const String& firmwareUrl);
@@ -52,17 +71,6 @@ private:
   static void sendOtaAck(bool success, const char* message);
   static void sendLog(const char* level, const char* message);
   static unsigned long getUptime();
-  
-
-  // Static member variables
-  static inline const char* deviceId = "esp_x";
-  static inline UserFunction userSetup = nullptr;
-  static inline UserFunction userLoop = nullptr;
-  static inline WiFiClient espClient;
-  static inline PubSubClient mqttClient = PubSubClient(espClient);
-  static inline unsigned long bootTime = 0;
-  static inline unsigned long lastHeartbeat = 0;
-  static inline unsigned long lastReconnect = 0;
 };
 
 #endif

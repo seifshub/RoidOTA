@@ -36,24 +36,28 @@ export class StorageService {
     return fs.readFile(logPath, 'utf-8');
   }
 
-  async saveFirmware(firmwareName: string, version: string, buffer: Buffer): Promise<{ s3Url: string; firmware: any }> {
+  async saveFirmware(firmwareName: string, version: string, buffer: Buffer): Promise<{ s3Key: string; signedUrl: string; firmware: any }> {
     try {
       // Generate S3 key
       const s3Key = this.s3Service.generateFirmwareKey(firmwareName, version);
       
-      // Upload to S3
-      const s3Url = await this.s3Service.uploadFirmware(s3Key, buffer);
+      // Upload to S3 and get signed URL
+      const uploadResult = await this.s3Service.uploadFirmware(s3Key, buffer);
       
       const firmware = await this.prisma.firmware.create({
         data: {
           name: firmwareName,
           version,
-          s3Url,
+          s3Key: uploadResult.s3Key, 
         },
       });
 
       this.logger.log(`Successfully saved firmware ${firmwareName} v${version}`);
-      return { s3Url, firmware };
+      return { 
+        s3Key: uploadResult.s3Key, 
+        signedUrl: uploadResult.signedUrl, 
+        firmware 
+      };
     } catch (error) {
       this.logger.error(`Failed to save firmware ${firmwareName}`, error);
       throw error;
@@ -70,11 +74,8 @@ export class StorageService {
         throw new Error('Firmware not found');
       }
 
-      // Extract S3 key from URL
-      const s3Key = firmware.s3Url.split('/').slice(-1)[0];
-      
-      // Delete from S3
-      await this.s3Service.deleteFirmware(s3Key);
+      // Delete from S3 using the stored S3 key
+      await this.s3Service.deleteFirmware(firmware.s3Key);
       
       // Delete from database
       await this.prisma.firmware.delete({
