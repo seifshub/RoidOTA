@@ -1,7 +1,7 @@
 {
   "name": "RoidOTA",
-  "version": "1.0.0",
-  "description": "Robust OTA + MQTT updater for ESP32 devices with user-safe loop",
+  "version": "2.0.0",
+  "description": "MQTT-driven over-the-air firmware updates for ESP32, with integrity checks and a non-blocking user loop",
   "keywords": ["ota", "esp32", "mqtt", "firmware", "updater"],
   "authors": [
     {
@@ -13,12 +13,13 @@
       "email": "seifeddine.chouchane@insat.ucar.tn"
     }
   ],
+  "license": "MIT",
+  "headers": "RoidOTA.h",
   "frameworks": ["arduino"],
   "platforms": ["espressif32"],
   "dependencies": [
-    "knolleary/PubSubClient",
-    "tzapu/WiFiManager",
-    "bblanchon/ArduinoJson",
-    "arduino-libraries/HTTPClient"
+    { "owner": "knolleary", "name": "PubSubClient", "version": "^2.8" },
+    { "owner": "tzapu", "name": "WiFiManager", "version": "^2.0.17" },
+    { "owner": "bblanchon", "name": "ArduinoJson", "version": "^7.0.0" }
   ]
 }

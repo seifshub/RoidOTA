@@ -1,273 +1,169 @@
-import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import * as mqtt from 'mqtt';
 import {
-  DeviceStatus,
-  DeviceRequest,
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { randomBytes } from 'crypto';
+import * as mqtt from 'mqtt';
+import type { AppConfig } from '../config/configuration';
+import { isValidDeviceId } from '../common/device-id';
+import {
+  DEVICE_EVENTS,
+  DeviceEvent,
+  FirmwareOfferMessage,
   MQTT_TOPICS,
-} from './types';
-import { Cron } from '@nestjs/schedule';
-import { DeviceService } from 'src/device/device.service';
-import { StorageService } from 'src/storage/storage.service';
-import { S3Service } from 'src/s3/s3.service';
+  SUBSCRIPTIONS,
+  parsePayload,
+  parseTopic,
+} from './mqtt.protocol';
 
+const PUBLISH_TIMEOUT_MS = 5000;
+
+/**
+ * Owns the broker connection. Inbound device messages are validated and
+ * re-emitted on the Nest event bus so that domain services never touch MQTT
+ * topics or raw payloads.
+ */
 @Injectable()
 export class MqttService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(MqttService.name);
-  private client: mqtt.MqttClient;
-  private deviceStatuses: Map<string, DeviceStatus> = new Map();
+  private client?: mqtt.MqttClient;
 
   constructor(
-    private readonly configService: ConfigService, 
-    private readonly deviceService: DeviceService,
-    private readonly storageService: StorageService,
-    private readonly s3Service: S3Service,
+    private readonly config: ConfigService,
+    private readonly events: EventEmitter2,
   ) {}
 
-  async onModuleInit() {
-    const brokerUrl = `mqtt://${this.configService.get('mqtt.broker')}:${this.configService.get('mqtt.port')}`;
+  onModuleInit() {
+    const { url, username, password } =
+      this.config.getOrThrow<AppConfig['mqtt']>('mqtt');
 
-    this.client = mqtt.connect(brokerUrl, {
-      username: this.configService.get('mqtt.username'),
-      password: this.configService.get('mqtt.password'),
+    const client = mqtt.connect(url, {
+      username,
+      password,
+      clientId: `roidota-backend-${randomBytes(4).toString('hex')}`,
+      reconnectPeriod: 2000,
+      connectTimeout: 10_000,
     });
+    this.client = client;
 
-    this.client.on('connect', () => {
-      this.logger.log(`Connected to MQTT broker at ${brokerUrl}`);
-
-      // Subscribe to all relevant topics
-      this.client.subscribe(MQTT_TOPICS.REQUEST, (err) => {
-        if (err) this.logger.error(`Failed to subscribe to ${MQTT_TOPICS.REQUEST}`, err);
-        else this.logger.log(`Subscribed to ${MQTT_TOPICS.REQUEST}`);
-      });
-      
-      this.client.subscribe(`${MQTT_TOPICS.STATUS}+`, (err) => {
-        if (err) this.logger.error(`Failed to subscribe to ${MQTT_TOPICS.STATUS}+`, err);
-        else this.logger.log(`Subscribed to ${MQTT_TOPICS.STATUS}+`);
-      });
-      
-      this.client.subscribe(`${MQTT_TOPICS.LOGS}+`, (err) => {
-        if (err) this.logger.error(`Failed to subscribe to ${MQTT_TOPICS.LOGS}+`, err);
-        else this.logger.log(`Subscribed to ${MQTT_TOPICS.LOGS}+`);
-      });
-      
-      this.client.subscribe(`${MQTT_TOPICS.ACK}+`, (err) => {
-        if (err) this.logger.error(`Failed to subscribe to ${MQTT_TOPICS.ACK}+`, err);
-        else this.logger.log(`Subscribed to ${MQTT_TOPICS.ACK}+`);
+    // 'connect' fires after every reconnect too, so subscriptions are restored.
+    client.on('connect', () => {
+      this.logger.log(`Connected to MQTT broker at ${url}`);
+      client.subscribe(SUBSCRIPTIONS, { qos: 1 }, (error) => {
+        if (error) this.logger.error(`Subscription failed: ${error.message}`);
+        else this.logger.log(`Subscribed to ${SUBSCRIPTIONS.join(', ')}`);
       });
     });
-
-    this.client.on('message', (topic, payload) => {
-      this.handleMessage(topic, payload.toString());
-    });
-
-    this.client.on('error', (error) => {
-      this.logger.error('MQTT connection error', error);
-    });
+    client.on('reconnect', () => this.logger.warn('Reconnecting to MQTT...'));
+    client.on('close', () => this.logger.warn('MQTT connection closed'));
+    client.on('error', (error) =>
+      this.logger.error(`MQTT error: ${error.message}`),
+    );
+    client.on('message', (topic, payload) =>
+      this.handleMessage(topic, payload.toString('utf8')),
+    );
   }
 
   async onModuleDestroy() {
-    if (this.client) {
-      this.client.end();
-    }
+    await this.client?.endAsync();
   }
 
-  private async getCurrentFirmware(deviceId: string): Promise<string | null> {
-    try {
-      const device = await this.deviceService.findByDeviceId(deviceId);
-      return device?.currentFirmware || null;
-    } catch (error) {
-      this.logger.error(`Failed to get current firmware for device ${deviceId}`, error);
-      return null;
-    }
+  isConnected(): boolean {
+    return this.client?.connected ?? false;
   }
 
-  async publish(topic: string, message: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      this.client.publish(topic, message, { qos: 1 }, (error) => {
-        if (error) {
-          this.logger.error(`Failed to publish to ${topic}`, error);
-          reject(error);
-        } else {
-          this.logger.log(`Published to ${topic}: ${message}`);
-          resolve();
-        }
-      });
-    });
+  publishFirmwareOffer(offer: FirmwareOfferMessage): Promise<void> {
+    return this.publish(`${MQTT_TOPICS.RESPONSE}${offer.device_id}`, offer);
   }
 
-  async publishFirmwareResponse(deviceId: string, s3Key: string): Promise<void> {
-    const topic = `${MQTT_TOPICS.RESPONSE}${deviceId}`;
-    const currentFirmware = await this.getCurrentFirmware(deviceId);
-
-    // Generate signed URL for the S3 key (valid for 1 hour)
-    const signedUrl = await this.s3Service.getSignedDownloadUrl(s3Key, 3600);
-
-    const message = JSON.stringify({
-      firmware_url: signedUrl,
-      current_firmware: currentFirmware || 'unknown',
-      timestamp: Date.now(),
-      device_id: deviceId
-    });
-
-    await this.publish(topic, message);
-  }
-
-  async sendCommand(deviceId: string, command: string, params?: Record<string, any>): Promise<void> {
-    const topic = `${MQTT_TOPICS.CMD}${deviceId}`;
-    const message = JSON.stringify({
+  sendCommand(
+    deviceId: string,
+    command: string,
+    params: Record<string, unknown> = {},
+  ): Promise<void> {
+    return this.publish(`${MQTT_TOPICS.CMD}${deviceId}`, {
       command,
-      params: params || {},
-      timestamp: Date.now()
+      params,
+      timestamp: Date.now(),
     });
-
-    await this.publish(topic, message);
   }
 
-  async sendTest(deviceId: string, message: string): Promise<void> {
-    const topic = `user/esp/command`;
-    await this.publish(topic, message);
-  }
-
-  getDeviceStatuses(): DeviceStatus[] {
-    return Array.from(this.deviceStatuses.values());
-  }
-
-  getDeviceStatus(deviceId: string): DeviceStatus | undefined {
-    return this.deviceStatuses.get(deviceId);
-  }
-
-  private handleMessage(topic: string, message: string) {
-    try {
-      this.logger.debug(`Received MQTT message on topic: ${topic}, message: ${message}`);
-      
-      if (topic === MQTT_TOPICS.REQUEST) {
-        this.handleDeviceRequest(message);
-      } else if (topic.startsWith(MQTT_TOPICS.STATUS)) {
-        this.handleDeviceStatus(topic, message);
-      } else if (topic.startsWith(MQTT_TOPICS.LOGS)) {
-        this.handleDeviceLogs(topic, message);
-      } else if (topic.startsWith(MQTT_TOPICS.ACK)) {
-        this.logger.debug(`Calling handleDeviceAck for topic: ${topic}`);
-        this.handleDeviceAck(topic, message);
-      } else {
-        this.logger.warn(`Unhandled MQTT topic: ${topic}`);
-      }
-    } catch (error) {
-      this.logger.error(`Error handling message from ${topic}`, error);
+  /**
+   * Publishes with QoS 1. Fails fast instead of queueing while offline, so an
+   * HTTP request never hangs waiting for the broker to come back.
+   */
+  private publish(topic: string, message: object): Promise<void> {
+    const client = this.client;
+    if (!client?.connected) {
+      return Promise.reject(
+        new ServiceUnavailableException('MQTT broker is not connected'),
+      );
     }
-  }
 
-  private async handleDeviceRequest(message: string) {
-    try {
-      const request: DeviceRequest = JSON.parse(message);
-      this.logger.log(`Device request from ${request.device_id}: ${message}`);
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () =>
+          reject(
+            new ServiceUnavailableException('Timed out publishing to MQTT'),
+          ),
+        PUBLISH_TIMEOUT_MS,
+      );
 
-      await this.deviceService.findOrCreateDevice(request.device_id, request.ip);
-
-      const currentFirmware = await this.getCurrentFirmware(request.device_id);
-
-      const existingStatus = this.deviceStatuses.get(request.device_id) || {} as DeviceStatus;
-      this.deviceStatuses.set(request.device_id, {
-        ...existingStatus,
-        deviceId: request.device_id,
-        ip: request.ip,
-        lastSeen: new Date(),
-      });
-
-    } catch (error) {
-      this.logger.error('Failed to handle device request', error);
-    }
-  }
-
-  private async handleDeviceStatus(topic: string, message: string) {
-    try {
-      const deviceId = topic.replace(MQTT_TOPICS.STATUS, '');
-      const status = JSON.parse(message.trim());
-
-      const currentFirmware = await this.getCurrentFirmware(deviceId);
-      const currentTime = new Date();
-
-      this.deviceStatuses.set(deviceId, {
-        deviceId,
-        status: status.status === 'updating' ? 'updating' :
-          status.status === 'error' ? 'error' : 'online',
-        ip: status.ip,
-        rssi: status.rssi,
-        uptime: status.uptime,
-        freeHeap: status.free_heap,
-        lastSeen: currentTime,
-      });
-
-      this.logger.debug(`Status update from ${deviceId} at ${currentTime.toISOString()}: status=${status.status || 'online'}, RSSI=${status.rssi}, Uptime=${status.uptime}ms`);
-    } catch (error) {
-      this.logger.error(`Failed to parse device status from ${topic}`, error);
-    }
-  }
-
-  private handleDeviceLogs(topic: string, message: string) {
-    try {
-      const deviceId = topic.replace(MQTT_TOPICS.LOGS, '');
-      const logData = JSON.parse(message);
-
-      this.logger.log(`[${deviceId}] ${logData.level}: ${logData.message}`);
-      
-    } catch (error) {
-      this.logger.error(`Failed to parse device logs from ${topic}`, error);
-    }
-  }
-
-  private async handleDeviceAck(topic: string, message: string) {
-    try {
-      const deviceId = topic.replace(MQTT_TOPICS.ACK, '');
-      const ackData = JSON.parse(message);
-      this.logger.log(`success: ${ackData.success}, message: ${ackData.message}, status: ${ackData.status}, timestamp: ${ackData.timestamp}`);
-      if (ackData.success) {
-        this.logger.log(`OTA update successful for device ${deviceId} (status: ${ackData.status || 'unknown'}, timestamp: ${ackData.timestamp || 'unknown'})`);
-        await this.storageService.updateDeploymentStatus(deviceId, 'SUCCESS');
-      } else {
-        const errorMessage = ackData.message || 'Unknown error';
-        this.logger.error(`OTA update failed for device ${deviceId}: ${errorMessage} (status: ${ackData.status || 'unknown'})`);
-        await this.storageService.updateDeploymentStatus(deviceId, 'FAILED', errorMessage);
-      }
-    } catch (error) {
-      this.logger.error(`Failed to parse device acknowledgment from ${topic}`, error);
-    }
-  }
-
-  async subscribe(topic: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      this.client.subscribe(topic, (error) => {
+      client.publish(topic, JSON.stringify(message), { qos: 1 }, (error) => {
+        clearTimeout(timer);
         if (error) {
-          reject(error);
+          this.logger.error(`Failed to publish to ${topic}: ${error.message}`);
+          reject(new ServiceUnavailableException('Failed to publish to MQTT'));
         } else {
+          // Payloads may carry signed URLs, so only the topic is logged.
+          this.logger.debug(`Published to ${topic}`);
           resolve();
         }
       });
     });
   }
 
-  @Cron('*/30 * * * * *')  // 30 seconds
-  async checkDeviceExpirations() {
-    const now = Date.now();
-    const offlineThreshold = 60000; // 60 seconds
-
-    for (const [deviceId, status] of this.deviceStatuses.entries()) {
-      const lastSeen = new Date(status.lastSeen).getTime();
-
-      if (now - lastSeen > offlineThreshold && status.status !== 'offline') {
-        this.logger.log(`Device ${deviceId} marked as offline - last seen ${Math.floor((now - lastSeen) / 1000)}s ago`);
-        status.status = 'offline';
-        this.deviceStatuses.set(deviceId, status);
-      }
+  private handleMessage(topic: string, raw: string) {
+    const parsed = parseTopic(topic);
+    if (!parsed) {
+      this.logger.warn(`Ignoring message on unexpected topic ${topic}`);
+      return;
     }
+
+    const payload = parsePayload(raw);
+    if (!payload) {
+      this.logger.warn(`Ignoring non-JSON payload on ${topic}`);
+      return;
+    }
+
+    if (parsed.kind === 'request') {
+      const deviceId = payload.device_id;
+      if (!isValidDeviceId(deviceId)) {
+        this.logger.warn('Ignoring device request with an invalid device_id');
+        return;
+      }
+      this.emit(DEVICE_EVENTS.REQUEST, { deviceId, payload });
+      return;
+    }
+
+    const event = {
+      status: DEVICE_EVENTS.STATUS,
+      log: DEVICE_EVENTS.LOG,
+      ack: DEVICE_EVENTS.ACK,
+    }[parsed.kind];
+    this.emit(event, { deviceId: parsed.deviceId, payload });
   }
 
-  @Cron('*/60 * * * * *') // Every minute
-  async checkPendingDeployments() {
-    const timeout = 5 * 60 * 1000; // 5 minutes
-    const cutoff = new Date(Date.now() - timeout);
-    
-    await this.storageService.timeoutPendingDeployments(cutoff);
+  private emit(event: string, data: DeviceEvent<Record<string, unknown>>) {
+    // Listeners are async; a failing listener must not take the broker
+    // connection (or the other listeners) down with it.
+    this.events.emitAsync(event, data).catch((error: Error) => {
+      this.logger.error(`Handler for ${event} failed: ${error.message}`);
+    });
   }
 }

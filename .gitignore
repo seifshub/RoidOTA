@@ -78,7 +78,6 @@ lerna-debug.log*
 *.tsbuildinfo
 
 # Lock files (choose one)
-package-lock.json
 yarn.lock
 pnpm-lock.yaml
 
@@ -114,3 +113,6 @@ roidota-frontend
 
 
 
+
+# Rust
+/cli/target

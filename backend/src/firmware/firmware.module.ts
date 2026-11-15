@@ -1,13 +1,9 @@
 import { Module } from '@nestjs/common';
-import { FirmwareController } from './firmware.controller';
-import { FirmwareService } from './firmware.service';
-import { MqttModule } from '../mqtt/mqtt.module';
-import { StorageModule } from '../storage/storage.module';
 import { S3Module } from '../s3/s3.module';
+import { FirmwareService } from './firmware.service';
 
 @Module({
-  imports: [MqttModule, StorageModule, S3Module],
-  controllers: [FirmwareController],
+  imports: [S3Module],
   providers: [FirmwareService],
   exports: [FirmwareService],
 })

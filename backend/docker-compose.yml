@@ -1,51 +1,106 @@
-version: '3.8'
+# Full RoidOTA stack: PostgreSQL, Mosquitto, S3 storage and the backend.
+#
+#   cp .env.example .env        # then edit secrets and S3_PUBLIC_ENDPOINT
+#   docker compose up -d --build
+#
+# For local development run only the infrastructure and start the backend
+# with `npm run start:dev`:
+#
+#   docker compose up -d postgres mosquitto s3
 
 services:
-  minio:
-    image: minio/minio:latest
-    container_name: roidota-minio
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      POSTGRES_USER: ${POSTGRES_USER:-roidota}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-roidota}
+      POSTGRES_DB: ${POSTGRES_DB:-roidota}
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
-      - minio_data:/data
-    networks:
-      - roidota-network
-    command: server /data --console-address ":9001"
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
-      retries: 5
       timeout: 3s
+      retries: 10
 
-  minio-client:
-    image: minio/mc:latest
-    container_name: roidota-minio-client
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    environment:
+      MQTT_USERNAME: ${MQTT_USERNAME:-roidota}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:-roidota}
+    # Build the password file from the environment, then start the broker.
+    command: >
+      sh -c 'touch /mosquitto/passwd && chmod 0700 /mosquitto/passwd &&
+      mosquitto_passwd -b /mosquitto/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD" &&
+      chown mosquitto:mosquitto /mosquitto/passwd &&
+      exec mosquitto -c /mosquitto/config/mosquitto.conf'
+    ports:
+      - "${MQTT_PORT:-1883}:1883"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto_data:/mosquitto/data
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h 127.0.0.1 -u \"$$MQTT_USERNAME\" -P \"$$MQTT_PASSWORD\" -t '$$SYS/broker/uptime' -C 1 -W 3"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # S3-compatible object storage (Versity S3 Gateway, Apache-2.0). MinIO no
+  # longer publishes container images; any S3-compatible service works here.
+  s3:
+    image: versity/versitygw:v1.11.0
+    restart: unless-stopped
+    environment:
+      ROOT_ACCESS_KEY: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY in .env}
+      ROOT_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY in .env}
+      VGW_PORT: ":9000"
+    command: posix /data
+    ports:
+      - "${S3_PORT:-9000}:9000"
+    volumes:
+      - s3_data:/data
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "9000"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: .
+    restart: unless-stopped
     depends_on:
-      minio:
+      postgres:
         condition: service_healthy
-    networks:
-      - roidota-network
-    entrypoint: >
-      /bin/sh -c "
-      echo 'Waiting for MinIO to be ready...';
-      until mc alias set minio http://minio:9000 minioadmin minioadmin; do 
-        echo 'MinIO not ready yet, retrying...'; 
-        sleep 2; 
-      done;
-      echo 'Connected to MinIO';
-      mc mb minio/roidota-fw --ignore-existing;
-      mc anonymous set download minio/roidota-fw;
-      echo 'MinIO bucket setup completed';
-      exit 0;
-      "
+      mosquitto:
+        condition: service_healthy
+      s3:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      API_KEY: ${API_KEY:?set API_KEY in .env}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-roidota}:${POSTGRES_PASSWORD:-roidota}@postgres:5432/${POSTGRES_DB:-roidota}
+      MQTT_BROKER: mosquitto
+      MQTT_PORT: 1883
+      MQTT_USERNAME: ${MQTT_USERNAME:-roidota}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:-roidota}
+      S3_ENDPOINT: http://s3:9000
+      # Devices download firmware from this address, so it has to be the
+      # host's LAN address rather than the internal "s3" hostname.
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:?set S3_PUBLIC_ENDPOINT in .env}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-roidota-fw}
+      S3_REGION: ${S3_REGION:-us-east-1}
+    ports:
+      - "${PORT:-3000}:3000"
 
 volumes:
-  minio_data:
-
-networks:
-  roidota-network:
-    driver: bridge
+  postgres_data:
+  mosquitto_data:
+  s3_data:
