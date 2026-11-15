@@ -1,187 +1,266 @@
 import {
-    Controller,
-    Post,
-    Get,
-    Delete,
-    Body,
-    UploadedFile,
-    UseInterceptors,
-    Param,
-    HttpStatus,
-    HttpException,
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiTags, ApiOperation, ApiConsumes } from '@nestjs/swagger';
+import {
+  ApiBody,
+  ApiConsumes,
+  ApiOperation,
+  ApiSecurity,
+  ApiTags,
+} from '@nestjs/swagger';
+import { DeviceIdPipe } from '../common/device-id';
+import { DeploymentService } from '../deployment/deployment.service';
+import { DeviceService } from '../device/device.service';
+import { MqttService } from '../mqtt/mqtt.service';
+import {
+  BatchDeployDto,
+  DeployDto,
+  DeviceCommandDto,
+  UploadBinDto,
+  UploadFirmwareDto,
+} from './dto';
 import { FirmwareService } from './firmware.service';
-import { UploadFirmwareDto } from './dtos';
+
+const UPLOAD_FIELD = 'userCode';
+
+const uploadSchema = (extra: Record<string, object> = {}) => ({
+  schema: {
+    type: 'object',
+    required: [UPLOAD_FIELD],
+    properties: {
+      [UPLOAD_FIELD]: { type: 'string', format: 'binary' },
+      firmwareName: { type: 'string' },
+      version: { type: 'string' },
+      ...extra,
+    },
+  },
+});
 
 @ApiTags('firmware')
+@ApiSecurity('api-key')
 @Controller('firmware')
 export class FirmwareController {
-    constructor(private readonly firmwareService: FirmwareService) { }
+  constructor(
+    private readonly firmwareService: FirmwareService,
+    private readonly deploymentService: DeploymentService,
+    private readonly deviceService: DeviceService,
+    private readonly mqttService: MqttService,
+  ) {}
 
-    @Get()
-    @ApiOperation({ summary: 'List all firmware' })
-    async listFirmware() {
-        return this.firmwareService.listFirmware();
+  // -------------------------------------------------------------- firmware
+
+  @Get()
+  @ApiOperation({ summary: 'List all firmware' })
+  listFirmware() {
+    return this.firmwareService.list();
+  }
+
+  @Delete(':firmwareId')
+  @ApiOperation({ summary: 'Delete firmware that is not in use' })
+  deleteFirmware(@Param('firmwareId', ParseUUIDPipe) firmwareId: string) {
+    return this.firmwareService.delete(firmwareId);
+  }
+
+  @Post('upload/bin')
+  @ApiOperation({ summary: 'Upload precompiled binary firmware' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody(uploadSchema())
+  @UseInterceptors(FileInterceptor(UPLOAD_FIELD))
+  async uploadBin(
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @Body() dto: UploadBinDto,
+  ) {
+    if (!file) throw new BadRequestException('No file uploaded');
+
+    const firmware = await this.firmwareService.upload(
+      file,
+      dto.firmwareName,
+      dto.version,
+    );
+    return {
+      status: 'success',
+      message: `Firmware ${firmware.name} ${firmware.version} uploaded successfully`,
+      firmware: await this.firmwareService.present(firmware),
+    };
+  }
+
+  @Post('upload/deploy/bin')
+  @ApiOperation({ summary: 'Upload binary firmware and optionally deploy it' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody(
+    uploadSchema({
+      targetDevices: { type: 'array', items: { type: 'string' } },
+      autoDeploy: { type: 'boolean' },
+    }),
+  )
+  @UseInterceptors(FileInterceptor(UPLOAD_FIELD))
+  async uploadAndDeployBin(
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @Body() dto: UploadFirmwareDto,
+  ) {
+    if (!file) throw new BadRequestException('No file uploaded');
+
+    const targets = dto.targetDevices ?? [];
+    if (dto.autoDeploy && targets.length === 0) {
+      throw new BadRequestException(
+        'autoDeploy requires at least one target device',
+      );
     }
 
-    @Delete(':firmwareId')
-    @ApiOperation({ summary: 'Delete firmware' })
-    async deleteFirmware(@Param('firmwareId') firmwareId: string) {
-        return this.firmwareService.deleteFirmware(firmwareId);
-    }
+    const firmware = await this.firmwareService.upload(
+      file,
+      dto.firmwareName,
+      dto.version,
+    );
+    // Targets may be devices that have not connected yet; register them so the
+    // firmware reaches them as soon as they do.
+    await Promise.all(targets.map((id) => this.deviceService.register(id)));
 
-    @Post('upload/deploy/bin')
-    @ApiOperation({ summary: 'Upload and deploy precompiled binary firmware' })
-    @ApiConsumes('multipart/form-data')
-    @UseInterceptors(FileInterceptor('userCode'))
-    async uploadAndDeployBin(
-        @UploadedFile() file: Express.Multer.File,
-        @Body() uploadDto: UploadFirmwareDto,
-    ){
-        if(!file){ 
-            throw new HttpException('No file uploaded', HttpStatus.BAD_REQUEST);
-        }
-        return this.firmwareService.uploadAndDeployBin(file,uploadDto)
-    }
+    const deployment = dto.autoDeploy
+      ? await this.deploymentService.batchDeploy(targets, firmware.id)
+      : null;
 
-    @Post('upload/bin')
-    @ApiOperation({ summary: 'Upload precompiled binary firmware' })
-    @ApiConsumes('multipart/form-data')
-    @UseInterceptors(FileInterceptor('userCode'))
-    async uploadBin(
-        @UploadedFile() file: Express.Multer.File,
-        @Body('firmwareName') firmwareName: string,
-        @Body('version') version?: string,
-    ) {
-        if (!file) {
-            throw new HttpException('No file uploaded', HttpStatus.BAD_REQUEST);
-        }
-        return this.firmwareService.uploadBin(file, firmwareName, version);
-    }
+    return {
+      status: 'success',
+      message: deployment
+        ? `Firmware ${firmware.name} ${firmware.version} uploaded; ${deployment.message.toLowerCase()}`
+        : `Firmware ${firmware.name} ${firmware.version} uploaded and ready for deployment`,
+      firmware: await this.firmwareService.present(firmware),
+      deployment,
+    };
+  }
 
-    @Post('deploy/batch')
-    @ApiOperation({ summary: 'Deploy firmware to multiple devices' })
-    async batchDeploy(@Body() deployData: { devices: string[]; firmwareId: string }) {
-        try {
-            if (!deployData.firmwareId) {
-                throw new HttpException('Firmware ID is required', HttpStatus.BAD_REQUEST);
-            }
-            if (!deployData.devices || deployData.devices.length === 0) {
-                throw new HttpException('At least one device is required', HttpStatus.BAD_REQUEST);
-            }
-            
-            console.log('Batch deploy request:', deployData);
-            const result = await this.firmwareService.batchDeploy(deployData.devices, deployData.firmwareId);
-            console.log('Batch deploy result:', result);
-            return result;
-        } catch (error) {
-            console.error('Batch deploy error:', error);
-            throw error;
-        }
-    }
+  // ------------------------------------------------------------ deployments
 
-    @Post('deploy/:deviceId')
-    @ApiOperation({ summary: 'Deploy firmware to specific device' })
-    async deployToDevice(
-        @Param('deviceId') deviceId: string,
-        @Body('firmwareId') firmwareId: string,
-    ) {
-        if (!firmwareId) {
-            throw new HttpException('Firmware ID  is required', HttpStatus.BAD_REQUEST);
-        }
-        return this.firmwareService.deployToDevice(deviceId, firmwareId);
-    }
+  @Post('deploy/batch')
+  @ApiOperation({ summary: 'Deploy firmware to multiple devices' })
+  batchDeploy(@Body() dto: BatchDeployDto) {
+    return this.deploymentService.batchDeploy(dto.devices, dto.firmwareId);
+  }
 
-    @Get('devices')
-    @ApiOperation({ summary: 'Get all devices' })
-    async getDevices() {
-        return this.firmwareService.getDevices();
-    }
+  @Post('deploy/:deviceId')
+  @ApiOperation({ summary: 'Deploy firmware to a specific device' })
+  deployToDevice(
+    @Param('deviceId', DeviceIdPipe) deviceId: string,
+    @Body() dto: DeployDto,
+  ) {
+    return this.deploymentService.deployToDevice(deviceId, dto.firmwareId);
+  }
 
-    @Delete('device/:deviceId')
-    @ApiOperation({ summary: 'Delete a device' })
-    async deleteDevice(@Param('deviceId') deviceId: string) {
-        return this.firmwareService.deleteDevice(deviceId);
-    }
+  @Get('deployments/history')
+  @ApiOperation({ summary: 'Get all deployment history' })
+  getDeploymentHistory() {
+    return this.deploymentService.getDeploymentHistory();
+  }
 
-    @Get('device/:deviceId/current-firmware')
-    @ApiOperation({ summary: 'Get current firmware of a specific device' })
-    async getDeviceCurrentFirmware(@Param('deviceId') deviceId: string) {
-        return this.firmwareService.getDeviceCurrentFirmware(deviceId);
-    }
+  @Get('deployments/pending')
+  @ApiOperation({ summary: 'Get deployments that are still in flight' })
+  getPendingDeployments() {
+    return this.deploymentService.getPendingDeployments();
+  }
 
-    @Get('device/statuses')
-    @ApiOperation({ summary: 'Get statuses of all devices' })
-    async getDeviceStatuses() {
-        return this.firmwareService.getDeviceStatuses();
-    }
+  @Get('deployments/:deploymentId')
+  @ApiOperation({ summary: 'Get a single deployment' })
+  getDeployment(@Param('deploymentId', ParseUUIDPipe) deploymentId: string) {
+    return this.deploymentService.getDeployment(deploymentId);
+  }
 
-    @Get('devices')
-    @ApiOperation({ summary: 'Get all devices from database' })
-    async getAllDevices() {
-        return this.firmwareService.getAllDevices();
-    }
+  // ---------------------------------------------------------------- devices
 
-    @Get('device/:deviceId/status')
-    @ApiOperation({ summary: 'Get status of a specific device' })
-    async getDeviceStatus(@Param('deviceId') deviceId: string) {
-        return this.firmwareService.getDeviceStatus(deviceId);
-    }
+  @Get('devices')
+  @ApiOperation({ summary: 'Get all registered devices' })
+  getDevices() {
+    return this.deviceService.listDevices();
+  }
 
-    @Get('device/:deviceId/history')
-    @ApiOperation({ summary: 'Get firmware history for a specific device' })
-    async getDeviceFirmwareHistory(@Param('deviceId') deviceId: string) {
-        return this.firmwareService.getDeviceFirmwareHistory(deviceId);
-    }
+  @Get('device/statuses')
+  @ApiOperation({ summary: 'Get live statuses of all devices' })
+  getDeviceStatuses() {
+    return this.deviceService.getStatuses();
+  }
 
-    @Get('deployments/history')
-    @ApiOperation({ summary: 'Get all deployment history' })
-    async getDeploymentHistory() {
-        return this.firmwareService.getDeploymentHistory();
-    }
+  @Delete('device/:deviceId')
+  @ApiOperation({ summary: 'Delete a device and its history' })
+  deleteDevice(@Param('deviceId', DeviceIdPipe) deviceId: string) {
+    return this.deviceService.deleteDevice(deviceId);
+  }
 
-    @Get('deployments/pending')
-    @ApiOperation({ summary: 'Get pending deployments' })
-    async getPendingDeployments() {
-        return this.firmwareService.getPendingDeployments();
-    }
+  @Get('device/:deviceId/current-firmware')
+  @ApiOperation({ summary: 'Get current firmware of a specific device' })
+  getDeviceCurrentFirmware(@Param('deviceId', DeviceIdPipe) deviceId: string) {
+    return this.deviceService.getCurrentFirmware(deviceId);
+  }
 
-    @Post('device/:deviceId/rollback')
-    @ApiOperation({ summary: 'Rollback device to previous firmware' })
-    async rollbackDevice(@Param('deviceId') deviceId: string) {
-        return this.firmwareService.rollbackDevice(deviceId);
-    }
+  @Get('device/:deviceId/status')
+  @ApiOperation({ summary: 'Get live status of a specific device' })
+  getDeviceStatus(@Param('deviceId', DeviceIdPipe) deviceId: string) {
+    return this.deviceService.getStatus(deviceId);
+  }
 
-    @Post('device/:deviceId/command')
-    @ApiOperation({ summary: 'Send command to device' })
-    async sendDeviceCommand(
-        @Param('deviceId') deviceId: string,
-        @Body('command') command: string,
-        @Body('params') params?: Record<string, any>,
-    ) {
-        if (!command) {
-            throw new HttpException('Command is required', HttpStatus.BAD_REQUEST);
-        }
-        return this.firmwareService.sendDeviceCommand(deviceId, command, params);
-    }
+  @Get('device/:deviceId/history')
+  @ApiOperation({ summary: 'Get firmware history for a specific device' })
+  getDeviceFirmwareHistory(@Param('deviceId', DeviceIdPipe) deviceId: string) {
+    return this.deploymentService.getDeviceHistory(deviceId);
+  }
 
-    @Post('device/:deviceId/restart')
-    @ApiOperation({ summary: 'Restart a specific device' })
-    async restartDevice(@Param('deviceId') deviceId: string) {
-        return this.firmwareService.restartDevice(deviceId);
-    }
+  @Post('device/:deviceId/rollback')
+  @ApiOperation({ summary: 'Roll a device back to its previous firmware' })
+  rollbackDevice(@Param('deviceId', DeviceIdPipe) deviceId: string) {
+    return this.deploymentService.rollbackDevice(deviceId);
+  }
 
-    @Post('device/:deviceId/heartbeat')
-    @ApiOperation({ summary: 'Request heartbeat from a specific device' })
-    async requestDeviceHeartbeat(@Param('deviceId') deviceId: string) {
-        return this.firmwareService.requestDeviceHeartbeat(deviceId);
-    }
+  @Post('device/:deviceId/command')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Send a command to a device' })
+  sendDeviceCommand(
+    @Param('deviceId', DeviceIdPipe) deviceId: string,
+    @Body() dto: DeviceCommandDto,
+  ) {
+    return this.sendCommand(deviceId, dto.command, dto.params);
+  }
 
-    @Get('test')
-    @ApiOperation({ summary: 'Test endpoint for firmware service' })
-    async testEndpoint() {
-        return { message: 'Firmware service is running' };
-    }
+  @Post('device/:deviceId/restart')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Restart a specific device' })
+  restartDevice(@Param('deviceId', DeviceIdPipe) deviceId: string) {
+    return this.sendCommand(deviceId, 'restart');
+  }
+
+  @Post('device/:deviceId/heartbeat')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Request a heartbeat from a specific device' })
+  requestDeviceHeartbeat(@Param('deviceId', DeviceIdPipe) deviceId: string) {
+    return this.sendCommand(deviceId, 'heartbeat');
+  }
+
+  @Get('test')
+  @ApiOperation({ summary: 'Test endpoint for the firmware service' })
+  testEndpoint() {
+    return { message: 'Firmware service is running' };
+  }
+
+  private async sendCommand(
+    deviceId: string,
+    command: string,
+    params?: Record<string, unknown>,
+  ) {
+    await this.mqttService.sendCommand(deviceId, command, params);
+    return {
+      status: 'success',
+      message: `Command sent to ${deviceId}`,
+      deviceId,
+      command,
+    };
+  }
 }

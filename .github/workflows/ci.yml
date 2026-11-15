@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: roidota
+          POSTGRES_PASSWORD: roidota
+          POSTGRES_DB: roidota
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U roidota" --health-interval 5s
+          --health-timeout 3s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://roidota:roidota@localhost:5432/roidota
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+      # The e2e suite also needs an MQTT broker and S3 storage with credentials,
+      # which service containers cannot be configured for; start them by hand.
+      - name: Start MQTT broker and S3 storage
+        run: |
+          docker run -d --name mosquitto -p 1883:1883 \
+            -e MQTT_USERNAME=roidota -e MQTT_PASSWORD=roidota \
+            -v "$PWD/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro" \
+            eclipse-mosquitto:2 sh -c 'touch /mosquitto/passwd && chmod 0700 /mosquitto/passwd &&
+              mosquitto_passwd -b /mosquitto/passwd "$MQTT_USERNAME" "$MQTT_PASSWORD" &&
+              chown mosquitto:mosquitto /mosquitto/passwd &&
+              exec mosquitto -c /mosquitto/config/mosquitto.conf'
+          docker run -d --name s3 -p 9000:9000 \
+            -e ROOT_ACCESS_KEY=roidota -e ROOT_SECRET_KEY=change-me-s3-secret -e VGW_PORT=:9000 \
+            versity/versitygw:v1.11.0 posix /tmp
+          sleep 5
+      - run: npx prisma migrate deploy
+      - run: npm run test:e2e
+
+  cli:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install platformio
+      - run: pio run -d examples/basic

@@ -14,10 +14,16 @@ model Firmware {
   id         String            @id @default(uuid())
   name       String
   version    String
-  s3Key      String            // Changed from s3Url to s3Key
+  s3Key      String
+  // Integrity metadata sent to devices; null for firmware uploaded before it existed.
+  size       Int?
+  md5        String?
+  sha256     String?
   uploadedAt DateTime          @default(now())
   devices    FirmwareHistory[]
   Device     Device[]
+
+  @@index([name, version])
 
   @@map("firmware")
 }
@@ -55,5 +61,7 @@ model FirmwareHistory {
   completedAt  DateTime?
   errorMessage String?
 
+  @@index([deviceId, status])
+  @@index([status, appliedAt])
   @@map("firmware_history")
 }

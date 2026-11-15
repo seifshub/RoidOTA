@@ -1,84 +1,106 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import {
+  CreateBucketCommand,
+  DeleteObjectCommand,
+  GetObjectCommand,
+  HeadBucketCommand,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import type { AppConfig } from '../config/configuration';
+
+const errorMessage = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
 
 @Injectable()
-export class S3Service {
+export class S3Service implements OnModuleInit {
   private readonly logger = new Logger(S3Service.name);
-  private readonly s3Client: S3Client;
+  private readonly client: S3Client;
+  /** Signs URLs against the endpoint devices can actually reach. */
+  private readonly presignClient: S3Client;
   private readonly bucketName: string;
 
-  constructor(private readonly configService: ConfigService) {
-    const s3Config = this.configService.get('s3');
-    
-    this.s3Client = new S3Client({
-      endpoint: s3Config.endpoint,
-      region: s3Config.region,
+  constructor(config: ConfigService) {
+    const s3 = config.getOrThrow<AppConfig['s3']>('s3');
+    const base = {
+      region: s3.region,
       credentials: {
-        accessKeyId: s3Config.accessKeyId,
-        secretAccessKey: s3Config.secretAccessKey,
+        accessKeyId: s3.accessKeyId!,
+        secretAccessKey: s3.secretAccessKey!,
       },
-      forcePathStyle: true, // Required for MinIO
-    });
+      forcePathStyle: s3.forcePathStyle, // path-style URLs, required by self-hosted S3 servers
+    };
 
-    this.bucketName = s3Config.bucketName;
+    this.client = new S3Client({ ...base, endpoint: s3.endpoint });
+    this.presignClient =
+      s3.publicEndpoint && s3.publicEndpoint !== s3.endpoint
+        ? new S3Client({ ...base, endpoint: s3.publicEndpoint })
+        : this.client;
+    this.bucketName = s3.bucketName;
   }
 
-  async uploadFirmware(key: string, buffer: Buffer, contentType: string = 'application/octet-stream'): Promise<{ s3Key: string; signedUrl: string }> {
+  /** Creates the bucket on first start so a fresh stack works out of the box. */
+  async onModuleInit() {
     try {
-      const command = new PutObjectCommand({
+      await this.client.send(
+        new HeadBucketCommand({ Bucket: this.bucketName }),
+      );
+    } catch (headError) {
+      try {
+        await this.client.send(
+          new CreateBucketCommand({ Bucket: this.bucketName }),
+        );
+        this.logger.log(`Created bucket ${this.bucketName}`);
+      } catch (createError) {
+        this.logger.warn(
+          `Bucket ${this.bucketName} is not reachable (${errorMessage(headError)}) ` +
+            `and could not be created (${errorMessage(createError)})`,
+        );
+      }
+    }
+  }
+
+  async isHealthy(): Promise<boolean> {
+    try {
+      await this.client.send(
+        new HeadBucketCommand({ Bucket: this.bucketName }),
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async upload(
+    key: string,
+    body: Buffer,
+    contentType = 'application/octet-stream',
+  ): Promise<void> {
+    await this.client.send(
+      new PutObjectCommand({
         Bucket: this.bucketName,
         Key: key,
-        Body: buffer,
+        Body: body,
         ContentType: contentType,
-      });
-
-      await this.s3Client.send(command);
-      
-      // Generate a signed URL for immediate use 
-      const signedUrl = await this.getSignedDownloadUrl(key, 7200); // 2 hours expiry
-      this.logger.log(`Successfully uploaded firmware to S3: ${key}`);
-      
-      return { s3Key: key, signedUrl };
-    } catch (error) {
-      this.logger.error(`Failed to upload firmware to S3: ${error.message}`, error);
-      throw error;
-    }
+      }),
+    );
+    this.logger.log(`Uploaded ${key} (${body.length} bytes)`);
   }
 
-  async deleteFirmware(key: string): Promise<void> {
-    try {
-      const command = new DeleteObjectCommand({
-        Bucket: this.bucketName,
-        Key: key,
-      });
-
-      await this.s3Client.send(command);
-      this.logger.log(`Successfully deleted firmware from S3: ${key}`);
-    } catch (error) {
-      this.logger.error(`Failed to delete firmware from S3: ${error.message}`, error);
-      throw error;
-    }
+  async delete(key: string): Promise<void> {
+    await this.client.send(
+      new DeleteObjectCommand({ Bucket: this.bucketName, Key: key }),
+    );
+    this.logger.log(`Deleted ${key}`);
   }
 
-  async getSignedDownloadUrl(key: string, expiresIn: number = 3600): Promise<string> {
-    try {
-      const command = new GetObjectCommand({
-        Bucket: this.bucketName,
-        Key: key,
-      });
-
-      const signedUrl = await getSignedUrl(this.s3Client, command, { expiresIn });
-      return signedUrl;
-    } catch (error) {
-      this.logger.error(`Failed to generate signed URL for ${key}: ${error.message}`, error);
-      throw error;
-    }
-  }
-
-  generateFirmwareKey(firmwareName: string, version: string): string {
-    const timestamp = Date.now();
-    return `firmware/${firmwareName}_v${version}_${timestamp}.bin`;
+  getSignedDownloadUrl(key: string, expiresIn = 3600): Promise<string> {
+    return getSignedUrl(
+      this.presignClient,
+      new GetObjectCommand({ Bucket: this.bucketName, Key: key }),
+      { expiresIn },
+    );
   }
 }
